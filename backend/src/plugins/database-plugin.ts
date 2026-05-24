@@ -1,7 +1,6 @@
 import { type FastifyPluginAsync } from 'fastify';
-import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from '@prisma/client';
 import fp from 'fastify-plugin';
+import { Pool } from 'pg';
 
 const databasePluginImpl: FastifyPluginAsync = async function databasePlugin(
   app,
@@ -12,7 +11,7 @@ const databasePluginImpl: FastifyPluginAsync = async function databasePlugin(
     app.decorate('database', {
       mode: 'test-memory',
     });
-    app.decorate('prisma', null);
+    app.decorate('pgPool', null);
 
     return;
   }
@@ -21,18 +20,19 @@ const databasePluginImpl: FastifyPluginAsync = async function databasePlugin(
     throw new Error('DATABASE_URL is required for durable PostgreSQL mode.');
   }
 
-  const adapter = new PrismaPg(config.databaseUrl);
-  const prisma = new PrismaClient({ adapter });
+  const pgPool = new Pool({
+    connectionString: config.databaseUrl,
+  });
 
-  await prisma.$connect();
+  await pgPool.query('SELECT 1');
 
   app.decorate('database', {
     mode: 'postgresql',
   });
-  app.decorate('prisma', prisma);
+  app.decorate('pgPool', pgPool);
 
   app.addHook('onClose', async () => {
-    await prisma.$disconnect();
+    await pgPool.end();
   });
 };
 

@@ -3,8 +3,8 @@ import fp from 'fastify-plugin';
 
 import { AuthService } from '../services/auth-service.js';
 import { LibraryService } from '../services/library-service.js';
-import { PrismaAuthService } from '../services/prisma-auth-service.js';
-import { PrismaLibraryService } from '../services/prisma-library-service.js';
+import { PostgresAuthService } from '../services/postgres-auth-service.js';
+import { PostgresLibraryService } from '../services/postgres-library-service.js';
 import { InMemoryHomeServerStore } from '../store/in-memory-store.js';
 
 const servicesPluginImpl: FastifyPluginAsync = async function servicesPlugin(
@@ -17,10 +17,10 @@ const servicesPluginImpl: FastifyPluginAsync = async function servicesPlugin(
     refreshTokenTtlSeconds: config.refreshTokenTtlSeconds,
   };
 
-  if (app.prisma !== null) {
-    const libraryService = new PrismaLibraryService(app.prisma, app.storageRoot);
-    const authService = new PrismaAuthService(
-      app.prisma,
+  if (app.pgPool !== null) {
+    const libraryService = new PostgresLibraryService(app.pgPool, app.storageRoot);
+    const authService = new PostgresAuthService(
+      app.pgPool,
       libraryService,
       authConfig,
     );

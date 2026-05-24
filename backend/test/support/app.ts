@@ -76,17 +76,17 @@ export async function createInMemoryTestAppContext(): Promise<TestAppContext> {
   };
 }
 
-export async function createPrismaTestAppContext(): Promise<TestAppContext> {
-  const databaseUrl = getPrismaTestDatabaseUrl();
+export async function createPostgresTestAppContext(): Promise<TestAppContext> {
+  const databaseUrl = getPostgresTestDatabaseUrl();
 
   assert.notEqual(
     databaseUrl,
     null,
-    'HOMESERVER_PRISMA_TEST_DATABASE_URL is required for Prisma integration tests.',
+    'HOMESERVER_POSTGRES_TEST_DATABASE_URL is required for PostgreSQL integration tests.',
   );
 
   const storageRoot = await mkdtemp(
-    path.join(os.tmpdir(), 'homeserver-backend-prisma-'),
+    path.join(os.tmpdir(), 'homeserver-backend-postgres-'),
   );
   const previousEnv = captureEnv();
 
@@ -102,12 +102,12 @@ export async function createPrismaTestAppContext(): Promise<TestAppContext> {
     config: createDurableTestServerConfig(databaseUrl, storageRoot),
   });
   await app.ready();
-  await resetPrismaState(app);
+  await resetPostgresState(app);
 
   return {
     app,
     cleanup: async () => {
-      await resetPrismaState(app);
+      await resetPostgresState(app);
       await app.close();
       await rm(storageRoot, { force: true, recursive: true });
       restoreEnv(previousEnv);
@@ -115,8 +115,8 @@ export async function createPrismaTestAppContext(): Promise<TestAppContext> {
   };
 }
 
-export function hasPrismaTestDatabaseUrl(): boolean {
-  return getPrismaTestDatabaseUrl() !== null;
+export function hasPostgresTestDatabaseUrl(): boolean {
+  return getPostgresTestDatabaseUrl() !== null;
 }
 
 export function authorizationHeaders(accessToken: string): Record<string, string> {
@@ -302,8 +302,10 @@ function createDurableTestServerConfig(
   };
 }
 
-function getPrismaTestDatabaseUrl(): string | null {
-  const databaseUrl = process.env.HOMESERVER_PRISMA_TEST_DATABASE_URL?.trim();
+function getPostgresTestDatabaseUrl(): string | null {
+  const databaseUrl =
+    process.env.HOMESERVER_POSTGRES_TEST_DATABASE_URL?.trim() ??
+    process.env.HOMESERVER_PRISMA_TEST_DATABASE_URL?.trim();
 
   if (databaseUrl === undefined || databaseUrl === '') {
     return null;
@@ -312,21 +314,21 @@ function getPrismaTestDatabaseUrl(): string | null {
   return databaseUrl;
 }
 
-async function resetPrismaState(app: FastifyInstance): Promise<void> {
-  if (app.prisma === null) {
+async function resetPostgresState(app: FastifyInstance): Promise<void> {
+  if (app.pgPool === null) {
     return;
   }
 
-  await app.prisma.$executeRawUnsafe(`
+  await app.pgPool.query(`
     TRUNCATE TABLE
-      "file_derivatives",
-      "media_jobs",
-      "upload_items",
-      "upload_batches",
-      "files",
-      "folders",
-      "sessions",
-      "users"
+      file_derivatives,
+      media_jobs,
+      upload_items,
+      upload_batches,
+      files,
+      folders,
+      sessions,
+      users
     RESTART IDENTITY CASCADE
   `);
 }

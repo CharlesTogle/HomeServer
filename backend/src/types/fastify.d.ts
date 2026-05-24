@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { PrismaClient } from '@prisma/client';
+import type { Pool } from 'pg';
 import type {
   AuthServiceContract,
   LibraryServiceContract,
@@ -20,7 +20,7 @@ declare module 'fastify' {
     ) => Promise<void>;
     database: DatabaseConnectionState;
     libraryService: LibraryServiceContract;
-    prisma: PrismaClient | null;
+    pgPool: Pool | null;
     serverConfig: ServerConfig;
     store: InMemoryHomeServerStore | null;
     storageRoot: string;
