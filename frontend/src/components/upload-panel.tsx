@@ -1,6 +1,6 @@
-import { HardDrive, LoaderCircle, Upload, X } from 'lucide-react'
-import { useRef, useState, type ChangeEvent } from 'react'
-import { cn } from '../lib/cn.ts'
+import { HardDrive, LoaderCircle, Upload, X } from "lucide-react";
+import { useRef, useState, type ChangeEvent } from "react";
+import { cn } from "../lib/cn.ts";
 import {
   fieldLabelClass,
   glassPanelClass,
@@ -10,35 +10,35 @@ import {
   sectionHeadingClass,
   sectionSubtextClass,
   softCardClass,
-} from '../lib/ui.ts'
-import { formatBytes } from '../utils/format.ts'
+} from "../lib/ui.ts";
+import { formatBytes } from "../utils/format.ts";
 
 interface UploadPanelProps {
-  currentFolderName: string
-  isPending: boolean
-  errorMessage: string | null
-  onClose: () => void
-  onUpload: (files: File[]) => Promise<void>
+  currentFolderName: string;
+  isPending: boolean;
+  errorMessage: string | null;
+  onClose: () => void;
+  onUpload: (files: File[]) => Promise<void>;
 }
 
 export function UploadPanel(props: UploadPanelProps): React.JSX.Element {
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
-  const [inputKey, setInputKey] = useState<number>(0)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [inputKey, setInputKey] = useState<number>(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>): void {
-    setSelectedFiles(Array.from(event.currentTarget.files ?? []))
+    setSelectedFiles(Array.from(event.currentTarget.files ?? []));
   }
 
   async function handleSubmit(): Promise<void> {
     if (selectedFiles.length === 0) {
-      return
+      return;
     }
 
-    await props.onUpload(selectedFiles)
-    setSelectedFiles([])
-    setInputKey((value) => value + 1)
-    props.onClose()
+    await props.onUpload(selectedFiles);
+    setSelectedFiles([]);
+    setInputKey((value) => value + 1);
+    props.onClose();
   }
 
   return (
@@ -47,8 +47,8 @@ export function UploadPanel(props: UploadPanelProps): React.JSX.Element {
       role="presentation"
       tabIndex={-1}
       onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          props.onClose()
+        if (event.key === "Escape") {
+          props.onClose();
         }
       }}
       onMouseDown={props.onClose}
@@ -56,7 +56,10 @@ export function UploadPanel(props: UploadPanelProps): React.JSX.Element {
       <dialog
         open
         aria-labelledby="upload-dialog-title"
-        className={cn(glassPanelClass, 'w-full max-w-[1120px] p-5 sm:p-6')}
+        className={cn(
+          glassPanelClass,
+          "static m-0 w-full max-w-[1120px] p-5 sm:p-6",
+        )}
       >
         <div onMouseDown={(event) => event.stopPropagation()}>
           <div className="mb-4 flex items-start justify-between gap-4">
@@ -66,7 +69,7 @@ export function UploadPanel(props: UploadPanelProps): React.JSX.Element {
                 Upload
               </span>
               <p className="text-sm leading-6 text-[color:var(--on-surface-variant)]">
-                Add files to{' '}
+                Add files to{" "}
                 <strong className="font-semibold text-[color:var(--on-surface)]">
                   {props.currentFolderName}
                 </strong>
@@ -85,7 +88,7 @@ export function UploadPanel(props: UploadPanelProps): React.JSX.Element {
           </div>
 
           <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
-            <div className={cn(softCardClass, 'flex flex-col gap-4 p-6')}>
+            <div className={cn(softCardClass, "flex flex-col gap-4 p-6")}>
               <div className="space-y-2">
                 <p className={sectionHeadingClass}>Current destination</p>
                 <h2
@@ -95,8 +98,8 @@ export function UploadPanel(props: UploadPanelProps): React.JSX.Element {
                   Stage files into {props.currentFolderName}
                 </h2>
                 <p className={sectionSubtextClass}>
-                  This preview keeps the upload flow immediate so the final backend stream can slot
-                  into the same interface.
+                  This preview keeps the upload flow immediate so the final
+                  backend stream can slot into the same interface.
                 </p>
               </div>
 
@@ -106,16 +109,16 @@ export function UploadPanel(props: UploadPanelProps): React.JSX.Element {
                   What you are testing
                 </p>
                 <p className="mt-2 text-sm leading-7 text-[color:var(--on-surface-variant)]">
-                  Folder targeting, immediate library refresh, and a modal surface that can later
-                  wrap real multipart progress.
+                  Folder targeting, immediate library refresh, and a modal
+                  surface that can later wrap real multipart progress.
                 </p>
               </div>
 
               <button
-                className={cn(primaryButtonClass, 'mt-auto w-full')}
+                className={cn(primaryButtonClass, "mt-auto w-full")}
                 type="button"
                 onClick={() => {
-                  void handleSubmit()
+                  void handleSubmit();
                 }}
                 disabled={props.isPending || selectedFiles.length === 0}
               >
@@ -148,11 +151,11 @@ export function UploadPanel(props: UploadPanelProps): React.JSX.Element {
                       Select one or more files
                     </strong>
                     <span className="mt-3 max-w-[30ch] text-base leading-8 text-[color:var(--on-surface-variant)]">
-                      Uploaded items stay within this mock session and appear in the collection
-                      immediately.
+                      Uploaded items stay within this mock session and appear in
+                      the collection immediately.
                     </span>
                     <button
-                      className={cn(primaryButtonClass, 'mt-6')}
+                      className={cn(primaryButtonClass, "mt-6")}
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
                     >
@@ -185,7 +188,7 @@ export function UploadPanel(props: UploadPanelProps): React.JSX.Element {
                             {file.name}
                           </strong>
                           <span className="mt-1 block truncate text-sm text-[color:var(--on-surface-variant)]">
-                            {file.type || 'application/octet-stream'}
+                            {file.type || "application/octet-stream"}
                           </span>
                         </div>
                         <span className="rounded-full bg-[rgba(244,114,182,0.12)] px-2.5 py-1 text-xs font-semibold text-[color:var(--primary)]">
@@ -200,7 +203,8 @@ export function UploadPanel(props: UploadPanelProps): React.JSX.Element {
                   <div className="space-y-2">
                     <Upload className="mx-auto size-5 text-[color:var(--primary)]" />
                     <p className="text-sm leading-6 text-[color:var(--on-surface-variant)]">
-                      Choose files to see them staged here before adding them to the folder.
+                      Choose files to see them staged here before adding them to
+                      the folder.
                     </p>
                   </div>
                 </div>
@@ -210,5 +214,5 @@ export function UploadPanel(props: UploadPanelProps): React.JSX.Element {
         </div>
       </dialog>
     </div>
-  )
+  );
 }

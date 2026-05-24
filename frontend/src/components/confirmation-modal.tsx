@@ -1,5 +1,5 @@
-import { AlertTriangle, LoaderCircle, X } from 'lucide-react'
-import { cn } from '../lib/cn.ts'
+import { AlertTriangle, LoaderCircle, X } from "lucide-react";
+import { cn } from "../lib/cn.ts";
 import {
   dangerButtonClass,
   ghostButtonClass,
@@ -7,24 +7,26 @@ import {
   iconButtonClass,
   pillClass,
   primaryButtonClass,
-} from '../lib/ui.ts'
+} from "../lib/ui.ts";
 
 interface ConfirmationModalProps {
-  open: boolean
-  title: string
-  description: string
-  confirmLabel: string
-  cancelLabel: string
-  tone: 'danger' | 'neutral'
-  isPending: boolean
-  errorMessage: string | null
-  onConfirm: () => void
-  onCancel: () => void
+  open: boolean;
+  title: string;
+  description: string;
+  confirmLabel: string;
+  cancelLabel: string;
+  tone: "danger" | "neutral";
+  isPending: boolean;
+  errorMessage: string | null;
+  onConfirm: () => void;
+  onCancel: () => void;
 }
 
-export function ConfirmationModal(props: ConfirmationModalProps): React.JSX.Element | null {
+export function ConfirmationModal(
+  props: ConfirmationModalProps,
+): React.JSX.Element | null {
   if (!props.open) {
-    return null
+    return null;
   }
 
   return (
@@ -33,8 +35,8 @@ export function ConfirmationModal(props: ConfirmationModalProps): React.JSX.Elem
       role="presentation"
       tabIndex={-1}
       onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          props.onCancel()
+        if (event.key === "Escape") {
+          props.onCancel();
         }
       }}
       onMouseDown={props.onCancel}
@@ -42,7 +44,10 @@ export function ConfirmationModal(props: ConfirmationModalProps): React.JSX.Elem
       <dialog
         open
         aria-labelledby="dialog-title"
-        className={cn(glassPanelClass, 'w-full max-w-[520px] p-6 sm:p-7')}
+        className={cn(
+          glassPanelClass,
+          "static m-0 w-full max-w-[520px] p-6 sm:p-7",
+        )}
       >
         <div onMouseDown={(event) => event.stopPropagation()}>
           <div className="flex items-start justify-between gap-4">
@@ -74,12 +79,6 @@ export function ConfirmationModal(props: ConfirmationModalProps): React.JSX.Elem
             </button>
           </div>
 
-          <div className="mt-5 rounded-[24px] bg-white/58 p-4 text-sm leading-7 text-[color:var(--secondary)]">
-            {props.tone === 'danger'
-              ? 'Destructive actions stay confirmation-gated so the future backend flow does not encourage accidental loss.'
-              : 'The current mock session lives in memory only and resets the visible workspace when it ends.'}
-          </div>
-
           {props.errorMessage !== null ? (
             <div
               className="mt-5 rounded-[22px] border border-[color:var(--error-container)] bg-[color:var(--error-container)] px-4 py-3 text-sm text-[color:var(--on-error-container)]"
@@ -91,7 +90,7 @@ export function ConfirmationModal(props: ConfirmationModalProps): React.JSX.Elem
 
           <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <button
-              className={cn(ghostButtonClass, 'w-full sm:w-auto')}
+              className={cn(ghostButtonClass, "w-full sm:w-auto")}
               type="button"
               onClick={props.onCancel}
             >
@@ -99,8 +98,10 @@ export function ConfirmationModal(props: ConfirmationModalProps): React.JSX.Elem
             </button>
             <button
               className={cn(
-                props.tone === 'danger' ? dangerButtonClass : primaryButtonClass,
-                'w-full sm:w-auto',
+                props.tone === "danger"
+                  ? dangerButtonClass
+                  : primaryButtonClass,
+                "w-full sm:w-auto",
               )}
               type="button"
               onClick={props.onConfirm}
@@ -117,5 +118,5 @@ export function ConfirmationModal(props: ConfirmationModalProps): React.JSX.Elem
         </div>
       </dialog>
     </div>
-  )
+  );
 }

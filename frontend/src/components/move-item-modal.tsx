@@ -1,5 +1,5 @@
-import { ArrowRightLeft, LoaderCircle, X } from 'lucide-react'
-import { cn } from '../lib/cn.ts'
+import { ArrowRightLeft, LoaderCircle, X } from "lucide-react";
+import { cn } from "../lib/cn.ts";
 import {
   fieldInputClass,
   fieldLabelClass,
@@ -8,36 +8,39 @@ import {
   iconButtonClass,
   pillClass,
   primaryButtonClass,
-} from '../lib/ui.ts'
-import type { LibraryItemKind } from '../types/library.ts'
+} from "../lib/ui.ts";
+import type { LibraryItemKind } from "../types/library.ts";
 
 export interface MoveDestinationOption {
-  id: string
-  label: string
-  disabled: boolean
+  id: string;
+  label: string;
+  disabled: boolean;
 }
 
 interface MoveItemModalProps {
-  open: boolean
-  itemKind: LibraryItemKind
-  itemName: string
-  destinationFolderId: string
-  destinations: MoveDestinationOption[]
-  isPending: boolean
-  errorMessage: string | null
-  onChangeDestination: (folderId: string) => void
-  onConfirm: () => void
-  onCancel: () => void
+  open: boolean;
+  itemKind: LibraryItemKind;
+  itemName: string;
+  destinationFolderId: string;
+  destinations: MoveDestinationOption[];
+  isPending: boolean;
+  errorMessage: string | null;
+  onChangeDestination: (folderId: string) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
 }
 
-export function MoveItemModal(props: MoveItemModalProps): React.JSX.Element | null {
+export function MoveItemModal(
+  props: MoveItemModalProps,
+): React.JSX.Element | null {
   if (!props.open) {
-    return null
+    return null;
   }
 
   const hasValidDestination = props.destinations.some(
-    (destination) => destination.id === props.destinationFolderId && !destination.disabled,
-  )
+    (destination) =>
+      destination.id === props.destinationFolderId && !destination.disabled,
+  );
 
   return (
     <div
@@ -45,8 +48,8 @@ export function MoveItemModal(props: MoveItemModalProps): React.JSX.Element | nu
       role="presentation"
       tabIndex={-1}
       onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          props.onCancel()
+        if (event.key === "Escape") {
+          props.onCancel();
         }
       }}
       onMouseDown={props.onCancel}
@@ -54,7 +57,10 @@ export function MoveItemModal(props: MoveItemModalProps): React.JSX.Element | nu
       <dialog
         open
         aria-labelledby="move-dialog-title"
-        className={cn(glassPanelClass, 'w-full max-w-[560px] p-6 sm:p-7')}
+        className={cn(
+          glassPanelClass,
+          "static m-0 w-full max-w-[560px] p-6 sm:p-7",
+        )}
       >
         <div onMouseDown={(event) => event.stopPropagation()}>
           <div className="flex items-start justify-between gap-4">
@@ -71,8 +77,8 @@ export function MoveItemModal(props: MoveItemModalProps): React.JSX.Element | nu
                   Move “{props.itemName}”
                 </h2>
                 <p className="text-sm leading-7 text-[color:var(--on-surface-variant)]">
-                  Re-home this item into another folder while keeping the existing mock action wired
-                  to backend-shaped behavior.
+                  Re-home this item into another folder while keeping the
+                  existing mock action wired to backend-shaped behavior.
                 </p>
               </div>
             </div>
@@ -88,8 +94,8 @@ export function MoveItemModal(props: MoveItemModalProps): React.JSX.Element | nu
           </div>
 
           <div className="mt-5 rounded-[24px] bg-white/60 p-4 text-sm leading-7 text-[color:var(--secondary)]">
-            Disabled destinations prevent moving a folder into itself, into a child, or back into
-            the same parent.
+            Disabled destinations prevent moving a folder into itself, into a
+            child, or back into the same parent.
           </div>
 
           <div className="mt-6 space-y-2">
@@ -100,10 +106,16 @@ export function MoveItemModal(props: MoveItemModalProps): React.JSX.Element | nu
               id="move-destination"
               className={fieldInputClass}
               value={props.destinationFolderId}
-              onChange={(event) => props.onChangeDestination(event.currentTarget.value)}
+              onChange={(event) =>
+                props.onChangeDestination(event.currentTarget.value)
+              }
             >
               {props.destinations.map((destination) => (
-                <option key={destination.id} value={destination.id} disabled={destination.disabled}>
+                <option
+                  key={destination.id}
+                  value={destination.id}
+                  disabled={destination.disabled}
+                >
                   {destination.label}
                 </option>
               ))}
@@ -121,14 +133,14 @@ export function MoveItemModal(props: MoveItemModalProps): React.JSX.Element | nu
 
           <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <button
-              className={cn(ghostButtonClass, 'w-full sm:w-auto')}
+              className={cn(ghostButtonClass, "w-full sm:w-auto")}
               type="button"
               onClick={props.onCancel}
             >
               Cancel
             </button>
             <button
-              className={cn(primaryButtonClass, 'w-full sm:w-auto')}
+              className={cn(primaryButtonClass, "w-full sm:w-auto")}
               type="button"
               onClick={props.onConfirm}
               disabled={props.isPending || !hasValidDestination}
@@ -144,5 +156,5 @@ export function MoveItemModal(props: MoveItemModalProps): React.JSX.Element | nu
         </div>
       </dialog>
     </div>
-  )
+  );
 }

@@ -1,5 +1,5 @@
-import { FolderPlus, LoaderCircle, X } from 'lucide-react'
-import { cn } from '../lib/cn.ts'
+import { FolderPlus, LoaderCircle, X } from "lucide-react";
+import { cn } from "../lib/cn.ts";
 import {
   fieldInputClass,
   fieldLabelClass,
@@ -8,21 +8,23 @@ import {
   iconButtonClass,
   pillClass,
   primaryButtonClass,
-} from '../lib/ui.ts'
+} from "../lib/ui.ts";
 
 interface CreateFolderModalProps {
-  open: boolean
-  folderName: string
-  isPending: boolean
-  errorMessage: string | null
-  onChangeFolderName: (value: string) => void
-  onConfirm: () => void
-  onCancel: () => void
+  open: boolean;
+  folderName: string;
+  isPending: boolean;
+  errorMessage: string | null;
+  onChangeFolderName: (value: string) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
 }
 
-export function CreateFolderModal(props: CreateFolderModalProps): React.JSX.Element | null {
+export function CreateFolderModal(
+  props: CreateFolderModalProps,
+): React.JSX.Element | null {
   if (!props.open) {
-    return null
+    return null;
   }
 
   return (
@@ -31,8 +33,8 @@ export function CreateFolderModal(props: CreateFolderModalProps): React.JSX.Elem
       role="presentation"
       tabIndex={-1}
       onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          props.onCancel()
+        if (event.key === "Escape") {
+          props.onCancel();
         }
       }}
       onMouseDown={props.onCancel}
@@ -40,7 +42,10 @@ export function CreateFolderModal(props: CreateFolderModalProps): React.JSX.Elem
       <dialog
         open
         aria-labelledby="create-folder-title"
-        className={cn(glassPanelClass, 'w-full max-w-[520px] p-6 sm:p-7')}
+        className={cn(
+          glassPanelClass,
+          "static m-0 w-full max-w-[520px] p-6 sm:p-7",
+        )}
       >
         <div onMouseDown={(event) => event.stopPropagation()}>
           <div className="flex items-start justify-between gap-4">
@@ -82,7 +87,9 @@ export function CreateFolderModal(props: CreateFolderModalProps): React.JSX.Elem
               aria-label="Folder name"
               className={fieldInputClass}
               value={props.folderName}
-              onChange={(event) => props.onChangeFolderName(event.currentTarget.value)}
+              onChange={(event) =>
+                props.onChangeFolderName(event.currentTarget.value)
+              }
             />
           </div>
 
@@ -97,14 +104,14 @@ export function CreateFolderModal(props: CreateFolderModalProps): React.JSX.Elem
 
           <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <button
-              className={cn(ghostButtonClass, 'w-full sm:w-auto')}
+              className={cn(ghostButtonClass, "w-full sm:w-auto")}
               type="button"
               onClick={props.onCancel}
             >
               Cancel
             </button>
             <button
-              className={cn(primaryButtonClass, 'w-full sm:w-auto')}
+              className={cn(primaryButtonClass, "w-full sm:w-auto")}
               type="button"
               onClick={props.onConfirm}
               disabled={props.isPending}
@@ -120,5 +127,5 @@ export function CreateFolderModal(props: CreateFolderModalProps): React.JSX.Elem
         </div>
       </dialog>
     </div>
-  )
+  );
 }
