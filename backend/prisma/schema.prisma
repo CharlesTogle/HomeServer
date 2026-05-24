@@ -1,0 +1,187 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum FileStatus {
+  uploading
+  ready
+}
+
+enum UploadBatchStatus {
+  open
+  completed
+  partial
+}
+
+enum UploadItemStatus {
+  pending
+  uploading
+  complete
+  failed
+}
+
+enum DerivativeStatus {
+  queued
+  processing
+  ready
+  failed
+}
+
+enum MediaJobStatus {
+  queued
+  processing
+  ready
+  failed
+}
+
+model User {
+  id            String         @id @default(uuid()) @db.Char(36)
+  email         String         @unique @db.VarChar(191)
+  passwordHash String        @map("password_hash")
+  createdAt     DateTime       @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt     DateTime       @default(now()) @map("updated_at") @db.DateTime(3)
+  files         File[]
+  folders       Folder[]
+  sessions      Session[]
+  uploadBatches UploadBatch[]
+  uploadItems   UploadItem[]
+
+  @@map("users")
+}
+
+model Session {
+  id               String    @id @default(uuid()) @db.Char(36)
+  userId           String    @map("user_id") @db.Char(36)
+  refreshTokenHash String    @unique @map("refresh_token_hash") @db.VarChar(128)
+  expiresAt        DateTime  @map("expires_at") @db.DateTime(3)
+  revokedAt        DateTime? @map("revoked_at") @db.DateTime(3)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt        DateTime  @default(now()) @map("updated_at") @db.DateTime(3)
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "sessions_user_id_idx")
+  @@map("sessions")
+}
+
+model Folder {
+  id              String    @id @default(uuid()) @db.Char(36)
+  userId          String    @map("user_id") @db.Char(36)
+  parentFolderId  String?   @map("parent_folder_id") @db.Char(36)
+  displayName     String    @map("display_name") @db.VarChar(255)
+  isRoot          Boolean   @default(false) @map("is_root")
+  storageRelPath  String    @map("storage_rel_path") @db.VarChar(1024)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt       DateTime  @default(now()) @map("updated_at") @db.DateTime(3)
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parentFolder    Folder?   @relation("FolderChildren", fields: [parentFolderId], references: [id], onDelete: Restrict)
+  childFolders    Folder[]  @relation("FolderChildren")
+  files           File[]
+  uploadBatches   UploadBatch[]
+
+  @@index([userId, parentFolderId], map: "folders_parent_lookup_idx")
+  @@unique([userId, parentFolderId, displayName], map: "folders_sibling_name_unique_idx")
+  @@unique([storageRelPath], map: "folders_storage_rel_path_unique_idx")
+  @@map("folders")
+}
+
+model File {
+  id              String      @id @default(uuid()) @db.Char(36)
+  userId          String      @map("user_id") @db.Char(36)
+  folderId        String      @map("folder_id") @db.Char(36)
+  displayName     String      @map("display_name") @db.VarChar(255)
+  originalName    String      @map("original_name") @db.VarChar(255)
+  storedExtension String      @map("stored_extension") @db.VarChar(32)
+  mimeType        String      @map("mime_type") @db.VarChar(255)
+  sizeBytes       BigInt      @map("size_bytes") @db.UnsignedBigInt
+  sha256          String      @db.VarChar(64)
+  status         FileStatus
+  storageRelPath  String      @map("storage_rel_path") @db.VarChar(1024)
+  createdAt       DateTime    @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt       DateTime    @default(now()) @map("updated_at") @db.DateTime(3)
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder          Folder      @relation(fields: [folderId], references: [id], onDelete: Restrict)
+  uploadItems     UploadItem[]
+  derivatives     FileDerivative[]
+  mediaJobs       MediaJob[]
+
+  @@index([userId, folderId, createdAt], map: "files_folder_lookup_idx")
+  @@index([userId, sha256], map: "files_sha256_lookup_idx")
+  @@unique([storageRelPath], map: "files_storage_rel_path_unique_idx")
+  @@map("files")
+}
+
+model UploadBatch {
+  id             String            @id @default(uuid()) @db.Char(36)
+  userId         String            @map("user_id") @db.Char(36)
+  folderId       String            @map("folder_id") @db.Char(36)
+  status         UploadBatchStatus
+  expectedCount  Int?              @map("expected_count")
+  completedCount Int               @default(0) @map("completed_count")
+  failedCount    Int               @default(0) @map("failed_count")
+  completedAt    DateTime?         @map("completed_at") @db.DateTime(3)
+  createdAt      DateTime          @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime          @default(now()) @map("updated_at") @db.DateTime(3)
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder         Folder            @relation(fields: [folderId], references: [id], onDelete: Restrict)
+  items          UploadItem[]
+
+  @@index([userId, createdAt], map: "upload_batches_user_id_idx")
+  @@map("upload_batches")
+}
+
+model UploadItem {
+  id                   String           @id @default(uuid()) @db.Char(36)
+  batchId              String           @map("batch_id") @db.Char(36)
+  userId               String           @map("user_id") @db.Char(36)
+  fileId               String?          @map("file_id") @db.Char(36)
+  clientIdempotencyKey String           @map("client_idempotency_key") @db.VarChar(191)
+  originalName         String           @map("original_name") @db.VarChar(255)
+  status              UploadItemStatus
+  errorCode            String?          @map("error_code") @db.VarChar(64)
+  createdAt            DateTime         @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt            DateTime         @default(now()) @map("updated_at") @db.DateTime(3)
+  batch               UploadBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  user                User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  file                File?            @relation(fields: [fileId], references: [id], onDelete: SetNull)
+
+  @@index([batchId, status], map: "upload_items_batch_status_idx")
+  @@unique([userId, batchId, clientIdempotencyKey], map: "upload_items_idempotency_unique_idx")
+  @@map("upload_items")
+}
+
+model FileDerivative {
+  id             String           @id @default(uuid()) @db.Char(36)
+  fileId         String           @map("file_id") @db.Char(36)
+  kind           String           @db.VarChar(64)
+  mimeType       String           @map("mime_type") @db.VarChar(255)
+  sizeBytes      BigInt           @map("size_bytes") @db.UnsignedBigInt
+  status         DerivativeStatus
+  storageRelPath String           @map("storage_rel_path") @db.VarChar(1024)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime         @default(now()) @map("updated_at") @db.DateTime(3)
+  file           File             @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@unique([fileId, kind], map: "file_derivatives_kind_unique_idx")
+  @@map("file_derivatives")
+}
+
+model MediaJob {
+  id           String          @id @default(uuid()) @db.Char(36)
+  fileId       String          @map("file_id") @db.Char(36)
+  jobType      String          @map("job_type") @db.VarChar(64)
+  status       MediaJobStatus
+  attemptCount Int             @default(0) @map("attempt_count")
+  scheduledAt  DateTime        @default(now()) @map("scheduled_at") @db.DateTime(3)
+  startedAt    DateTime?       @map("started_at") @db.DateTime(3)
+  finishedAt   DateTime?       @map("finished_at") @db.DateTime(3)
+  createdAt    DateTime        @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime        @default(now()) @map("updated_at") @db.DateTime(3)
+  file         File            @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledAt], map: "media_jobs_status_scheduled_idx")
+  @@map("media_jobs")
+}
