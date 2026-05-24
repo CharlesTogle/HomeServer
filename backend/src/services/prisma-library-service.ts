@@ -16,7 +16,6 @@ import type {
   UploadItem,
 } from '@prisma/client';
 import { MulterError } from 'multer';
-import pLimit from 'p-limit';
 
 import type {
   CreateFolderInput,
@@ -24,6 +23,7 @@ import type {
   CreateUploadItemInput,
   FileReadDescriptor,
   FolderEntries,
+  FolderTreeFolder,
   LibraryServiceContract,
   UpdateFileInput,
   UpdateFolderInput,
@@ -53,15 +53,35 @@ import {
   ensureValidDisplayName,
   ensureWithinStorageRoot,
   getStoredExtension,
-  replaceStoragePathPrefix,
 } from '../utils/storage-paths.js';
 
 type PrismaDatabaseClient = PrismaClient | Prisma.TransactionClient;
 
 export class PrismaLibraryService implements LibraryServiceContract {
-  private readonly deleteLimiter = pLimit(4);
   private readonly prisma: PrismaClient;
   private readonly storageRoot: string;
+
+  private isPrismaErrorCode(error: unknown, code: string): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: unknown }).code === code
+    );
+  }
+
+  private isFsErrorCode(error: unknown, code: string): boolean {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as { code?: unknown }).code === code
+    );
+  }
+
+  private buildUserTmpRelPath(userId: string, ...segments: string[]): string {
+    return path.posix.join(buildRootStorageRelPath(userId), '_tmp', ...segments);
+  }
 
   public constructor(prisma: PrismaClient, storageRoot: string) {
     this.prisma = prisma;
@@ -73,36 +93,67 @@ export class PrismaLibraryService implements LibraryServiceContract {
     input: CreateFolderInput,
   ): Promise<FolderRecord> {
     const normalizedName = ensureValidDisplayName(input.name);
-    const parentFolder = await this.getOwnedFolder(userId, input.parentFolderId);
-
-    await this.assertSiblingFolderNameAvailable(
-      userId,
-      parentFolder.id,
-      normalizedName,
-      null,
-    );
-
     const folderId = randomUUID();
     const now = new Date();
-    const storageRelPath = buildFolderStorageRelPath(
-      parentFolder.storageRelPath,
-      folderId,
-    );
+    let folder: Folder;
 
-    await mkdir(this.resolveAbsolutePath(storageRelPath), { recursive: true });
+    try {
+      folder = await this.prisma.$transaction(async (tx) => {
+        const parentFolder = await this.getOwnedFolderWithClient(
+          tx,
+          userId,
+          input.parentFolderId,
+        );
 
-    const folder = await this.prisma.folder.create({
-      data: {
-        createdAt: now,
-        displayName: normalizedName,
-        id: folderId,
-        isRoot: false,
-        parentFolderId: parentFolder.id,
-        storageRelPath,
-        updatedAt: now,
-        userId,
-      },
-    });
+        await this.assertSiblingFolderNameAvailableWithClient(
+          tx,
+          userId,
+          parentFolder.id,
+          normalizedName,
+          null,
+        );
+
+        const storageRelPath = buildFolderStorageRelPath(
+          parentFolder.storageRelPath,
+          folderId,
+        );
+
+        return tx.folder.create({
+          data: {
+            createdAt: now,
+            displayName: normalizedName,
+            id: folderId,
+            isRoot: false,
+            parentFolderId: parentFolder.id,
+            storageRelPath,
+            updatedAt: now,
+            userId,
+          },
+        });
+      });
+    } catch (error) {
+      if (this.isPrismaErrorCode(error, 'P2002')) {
+        throw new ConflictError('A sibling folder already uses that name.');
+      }
+
+      throw error;
+    }
+
+    try {
+      await mkdir(this.resolveAbsolutePath(folder.storageRelPath), {
+        recursive: true,
+      });
+    } catch (error) {
+      // DB-first durability: if the directory cannot be created, remove the folder row.
+      await this.prisma.folder
+        .delete({
+          where: {
+            id: folder.id,
+          },
+        })
+        .catch(() => undefined);
+      throw error;
+    }
 
     return toFolderRecord(folder);
   }
@@ -158,15 +209,40 @@ export class PrismaLibraryService implements LibraryServiceContract {
       return toUploadItemRecord(existingUploadItem);
     }
 
-    const uploadItem = await this.prisma.uploadItem.create({
-      data: {
-        batchId: batch.id,
-        clientIdempotencyKey,
-        originalName,
-        status: 'pending',
-        userId,
-      },
-    });
+    let uploadItem: UploadItem;
+
+    try {
+      uploadItem = await this.prisma.uploadItem.create({
+        data: {
+          batchId: batch.id,
+          clientIdempotencyKey,
+          originalName,
+          status: 'pending',
+          userId,
+        },
+      });
+    } catch (error) {
+      // Another request may have created the same idempotency key concurrently.
+      if (this.isPrismaErrorCode(error, 'P2002')) {
+        const racedUploadItem = await this.prisma.uploadItem.findUnique({
+          where: {
+            userId_batchId_clientIdempotencyKey: {
+              batchId: batch.id,
+              clientIdempotencyKey,
+              userId,
+            },
+          },
+        });
+
+        if (racedUploadItem !== null) {
+          uploadItem = racedUploadItem;
+        } else {
+          throw error;
+        }
+      } else {
+        throw error;
+      }
+    }
 
     await this.refreshBatchStatus(batch.id);
 
@@ -175,13 +251,23 @@ export class PrismaLibraryService implements LibraryServiceContract {
 
   public async deleteFile(userId: string, fileId: string): Promise<void> {
     const file = await this.getOwnedFile(userId, fileId);
+    const stagedDelete = await this.stageStoragePathForDeletion(
+      userId,
+      file.storageRelPath,
+    );
 
-    await this.safeUnlink(file.storageRelPath);
-    await this.prisma.file.delete({
-      where: {
-        id: file.id,
-      },
-    });
+    try {
+      await this.prisma.file.delete({
+        where: {
+          id: file.id,
+        },
+      });
+    } catch (error) {
+      await this.restoreStagedStoragePath(stagedDelete);
+      throw error;
+    }
+
+    await this.purgeStagedStoragePath(stagedDelete);
   }
 
   public async deleteFolder(
@@ -210,87 +296,85 @@ export class PrismaLibraryService implements LibraryServiceContract {
     if (!recursive && (descendantFolders.length > 0 || filesToDelete.length > 0)) {
       throw new ConflictError('Folder is not empty.');
     }
-
-    await Promise.all(
-      filesToDelete.map((fileRecord) =>
-        this.deleteLimiter(() => this.safeUnlink(fileRecord.storageRelPath)),
-      ),
+    const stagedDelete = await this.stageStoragePathForDeletion(
+      userId,
+      folder.storageRelPath,
     );
 
-    await rm(this.resolveAbsolutePath(folder.storageRelPath), {
-      force: true,
-      recursive,
-    });
-
-    const uploadBatches = await this.prisma.uploadBatch.findMany({
-      select: {
-        id: true,
-      },
-      where: {
-        folderId: {
-          in: allFolderIds,
+    try {
+      const uploadBatches = await this.prisma.uploadBatch.findMany({
+        select: {
+          id: true,
         },
-        userId,
-      },
-    });
-    const uploadBatchIds = uploadBatches.map((uploadBatch) => uploadBatch.id);
-
-    await this.prisma.$transaction([
-      this.prisma.uploadItem.deleteMany({
-        where: {
-          batchId: {
-            in: uploadBatchIds,
-          },
-          userId,
-        },
-      }),
-      this.prisma.uploadBatch.deleteMany({
-        where: {
-          id: {
-            in: uploadBatchIds,
-          },
-          userId,
-        },
-      }),
-      this.prisma.file.deleteMany({
         where: {
           folderId: {
             in: allFolderIds,
           },
           userId,
         },
-      }),
-      this.prisma.folder.deleteMany({
-        where: {
-          id: {
-            in: allFolderIds,
+      });
+      const uploadBatchIds = uploadBatches.map((uploadBatch) => uploadBatch.id);
+
+      await this.prisma.$transaction([
+        this.prisma.uploadItem.deleteMany({
+          where: {
+            batchId: {
+              in: uploadBatchIds,
+            },
+            userId,
           },
-          userId,
-        },
-      }),
-    ]);
+        }),
+        this.prisma.uploadBatch.deleteMany({
+          where: {
+            id: {
+              in: uploadBatchIds,
+            },
+            userId,
+          },
+        }),
+        this.prisma.file.deleteMany({
+          where: {
+            folderId: {
+              in: allFolderIds,
+            },
+            userId,
+          },
+        }),
+        this.prisma.folder.deleteMany({
+          where: {
+            id: {
+              in: allFolderIds,
+            },
+            userId,
+          },
+        }),
+      ]);
+    } catch (error) {
+      await this.restoreStagedStoragePath(stagedDelete);
+      throw error;
+    }
+
+    await this.purgeStagedStoragePath(stagedDelete);
   }
 
   public async ensureUserRootFolder(userId: string): Promise<FolderRecord> {
-    const existingRootFolder = await this.prisma.folder.findFirst({
-      where: {
-        isRoot: true,
-        userId,
-      },
-    });
+    const existingRootFolder = await this.findUserRootFolder(this.prisma, userId);
 
     if (existingRootFolder !== null) {
+      await mkdir(this.resolveAbsolutePath(existingRootFolder.storageRelPath), {
+        recursive: true,
+      });
       return toFolderRecord(existingRootFolder);
     }
 
     const now = new Date();
     const folderId = randomUUID();
     const storageRelPath = buildRootStorageRelPath(userId);
-
-    await mkdir(this.resolveAbsolutePath(storageRelPath), { recursive: true });
+    let rootFolder: Folder;
+    let createdRootFolderRow = false;
 
     try {
-      const rootFolder = await this.prisma.folder.create({
+      rootFolder = await this.prisma.folder.create({
         data: {
           createdAt: now,
           displayName: 'Root',
@@ -302,29 +386,72 @@ export class PrismaLibraryService implements LibraryServiceContract {
           userId,
         },
       });
-
-      return toFolderRecord(rootFolder);
+      createdRootFolderRow = true;
     } catch (error) {
-      if (
-        typeof error === 'object' &&
-        error !== null &&
-        'code' in error &&
-        error.code === 'P2002'
-      ) {
-        const rootFolder = await this.prisma.folder.findFirst({
-          where: {
-            isRoot: true,
-            userId,
-          },
-        });
+      if (!this.isPrismaErrorCode(error, 'P2002')) {
+        throw error;
+      }
 
-        if (rootFolder !== null) {
-          return toFolderRecord(rootFolder);
-        }
+      const racedRootFolder = await this.findUserRootFolder(this.prisma, userId);
+
+      if (racedRootFolder === null) {
+        throw error;
+      }
+
+      rootFolder = racedRootFolder;
+    }
+
+    try {
+      await mkdir(this.resolveAbsolutePath(rootFolder.storageRelPath), {
+        recursive: true,
+      });
+    } catch (error) {
+      if (createdRootFolderRow) {
+        await this.prisma.folder
+          .delete({
+            where: {
+              id: rootFolder.id,
+            },
+          })
+          .catch(() => undefined);
       }
 
       throw error;
     }
+
+    return toFolderRecord(rootFolder);
+  }
+
+  public async createUserRootFolderInTransaction(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    createdAt: Date,
+    folderId: string = randomUUID(),
+  ): Promise<string> {
+    const existingRootFolder = await this.findUserRootFolder(tx, userId);
+
+    if (existingRootFolder !== null) {
+      return existingRootFolder.storageRelPath;
+    }
+
+    const storageRelPath = buildRootStorageRelPath(userId);
+
+    await mkdir(this.resolveAbsolutePath(storageRelPath), { recursive: true });
+
+    await tx.folder.create({
+      data: {
+        createdAt,
+        displayName: 'Root',
+        id: folderId,
+        isRoot: true,
+        parentFolderId: null,
+        storageRelPath,
+        updatedAt: createdAt,
+        userId,
+      },
+    });
+
+    return storageRelPath;
   }
 
   public async getFile(userId: string, fileId: string): Promise<FileRecord> {
@@ -401,6 +528,52 @@ export class PrismaLibraryService implements LibraryServiceContract {
     };
   }
 
+  public async listFolders(userId: string): Promise<FolderTreeFolder[]> {
+    const [fileCounts, folders] = await Promise.all([
+      this.prisma.file.groupBy({
+        _count: {
+          _all: true,
+        },
+        by: ['folderId'],
+        where: {
+          userId,
+        },
+      }),
+      this.prisma.folder.findMany({
+        orderBy: {
+          displayName: 'asc',
+        },
+        where: {
+          userId,
+        },
+      }),
+    ]);
+    const childFolderCountByParentId = new Map<string, number>();
+    const fileCountByFolderId = new Map<string, number>();
+
+    for (const folder of folders) {
+      if (folder.parentFolderId === null) {
+        continue;
+      }
+
+      childFolderCountByParentId.set(
+        folder.parentFolderId,
+        (childFolderCountByParentId.get(folder.parentFolderId) ?? 0) + 1,
+      );
+    }
+
+    for (const entry of fileCounts) {
+      fileCountByFolderId.set(entry.folderId, entry._count._all);
+    }
+
+    return folders.map((folder) => ({
+      folder: toFolderRecord(folder),
+      itemCount:
+        (childFolderCountByParentId.get(folder.id) ?? 0) +
+        (fileCountByFolderId.get(folder.id) ?? 0),
+    }));
+  }
+
   public async getRootFolder(userId: string): Promise<FolderRecord> {
     const rootFolder = await this.prisma.folder.findFirst({
       where: {
@@ -451,19 +624,50 @@ export class PrismaLibraryService implements LibraryServiceContract {
       input.name === undefined
         ? file.displayName
         : ensureValidDisplayName(input.name);
-    const nextFolder =
-      input.folderId === undefined
-        ? await this.getOwnedFolder(userId, file.folderId)
-        : await this.getOwnedFolder(userId, input.folderId);
-    let nextStorageRelPath = file.storageRelPath;
+    const nextFolderId = input.folderId ?? file.folderId;
+    const didMove = nextFolderId !== file.folderId;
+    const now = new Date();
 
-    if (file.folderId !== nextFolder.id) {
-      nextStorageRelPath = buildFileStorageRelPath(
-        nextFolder.storageRelPath,
-        file.id,
-        file.storedExtension,
-      );
+    if (!didMove) {
+      const updatedFile = await this.prisma.file.update({
+        data: {
+          displayName: nextName,
+          updatedAt: now,
+        },
+        where: {
+          id: file.id,
+        },
+      });
 
+      return toFileRecord(updatedFile);
+    }
+
+    const nextFolder = await this.getOwnedFolder(userId, nextFolderId);
+    const nextStorageRelPath = buildFileStorageRelPath(
+      nextFolder.storageRelPath,
+      file.id,
+      file.storedExtension,
+    );
+
+    await this.assertStoragePathExists(
+      file.storageRelPath,
+      'File content is missing on disk.',
+    );
+    await this.assertStoragePathDoesNotExist(nextStorageRelPath);
+
+    const updatedFile = await this.prisma.file.update({
+      data: {
+        displayName: nextName,
+        folderId: nextFolder.id,
+        storageRelPath: nextStorageRelPath,
+        updatedAt: now,
+      },
+      where: {
+        id: file.id,
+      },
+    });
+
+    try {
       await mkdir(this.resolveAbsolutePath(nextFolder.storageRelPath), {
         recursive: true,
       });
@@ -471,19 +675,23 @@ export class PrismaLibraryService implements LibraryServiceContract {
         this.resolveAbsolutePath(file.storageRelPath),
         this.resolveAbsolutePath(nextStorageRelPath),
       );
-    }
+    } catch (error) {
+      await this.prisma.file
+        .update({
+          data: {
+            displayName: file.displayName,
+            folderId: file.folderId,
+            storageRelPath: file.storageRelPath,
+            updatedAt: new Date(),
+          },
+          where: {
+            id: file.id,
+          },
+        })
+        .catch(() => undefined);
 
-    const updatedFile = await this.prisma.file.update({
-      data: {
-        displayName: nextName,
-        folderId: nextFolder.id,
-        storageRelPath: nextStorageRelPath,
-        updatedAt: new Date(),
-      },
-      where: {
-        id: file.id,
-      },
-    });
+      throw error;
+    }
 
     return toFileRecord(updatedFile);
   }
@@ -507,12 +715,19 @@ export class PrismaLibraryService implements LibraryServiceContract {
       input.name === undefined
         ? folder.displayName
         : ensureValidDisplayName(input.name);
-    const nextParentFolder =
-      input.parentFolderId === undefined
-        ? await this.getOwnedFolder(userId, folder.parentFolderId ?? '')
-        : await this.getOwnedFolder(userId, input.parentFolderId);
+    const nextParentFolderId = input.parentFolderId ?? folder.parentFolderId;
 
-    await this.assertFolderMoveIsValid(toFolderRecord(folder), nextParentFolder.id);
+    if (nextParentFolderId === null) {
+      throw new BadRequestError('parentFolderId must be provided.');
+    }
+
+    const nextParentFolder = await this.getOwnedFolder(userId, nextParentFolderId);
+    const didMove = folder.parentFolderId !== nextParentFolder.id;
+
+    if (didMove) {
+      await this.assertFolderMoveIsValid(toFolderRecord(folder), nextParentFolder.id);
+    }
+
     await this.assertSiblingFolderNameAvailable(
       userId,
       nextParentFolder.id,
@@ -520,63 +735,37 @@ export class PrismaLibraryService implements LibraryServiceContract {
       folder.id,
     );
 
-    if (folder.parentFolderId !== nextParentFolder.id) {
+    if (didMove) {
       const currentStorageRelPath = folder.storageRelPath;
       const nextStorageRelPath = buildFolderStorageRelPath(
         nextParentFolder.storageRelPath,
         folder.id,
       );
-      const descendants = await this.getDescendantFolders(userId, folder.id);
-      const files = await this.prisma.file.findMany({
-        where: {
-          storageRelPath: {
-            startsWith: `${currentStorageRelPath}/`,
-          },
-          userId,
-        },
-      });
       const now = new Date();
 
-      await mkdir(this.resolveAbsolutePath(nextParentFolder.storageRelPath), {
-        recursive: true,
-      });
-      await rename(
-        this.resolveAbsolutePath(currentStorageRelPath),
-        this.resolveAbsolutePath(nextStorageRelPath),
+      await this.assertStoragePathExists(
+        currentStorageRelPath,
+        'Folder content is missing on disk.',
       );
+      await this.assertStoragePathDoesNotExist(nextStorageRelPath);
 
-      const updatedRootFolder = await this.prisma.$transaction(async (tx) => {
-        for (const descendant of descendants) {
-          await tx.folder.update({
-            data: {
-              storageRelPath: replaceStoragePathPrefix(
-                descendant.storageRelPath,
-                currentStorageRelPath,
-                nextStorageRelPath,
-              ),
-              updatedAt: now,
-            },
-            where: {
-              id: descendant.id,
-            },
-          });
-        }
-
-        for (const fileRecord of files) {
-          await tx.file.update({
-            data: {
-              storageRelPath: replaceStoragePathPrefix(
-                fileRecord.storageRelPath,
-                currentStorageRelPath,
-                nextStorageRelPath,
-              ),
-              updatedAt: now,
-            },
-            where: {
-              id: fileRecord.id,
-            },
-          });
-        }
+      const updatedFolder = await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`
+          UPDATE folders
+          SET
+            storage_rel_path = ${nextStorageRelPath} || substring(storage_rel_path FROM ${currentStorageRelPath.length + 1}),
+            updated_at = ${now}
+          WHERE user_id = ${userId}
+            AND storage_rel_path LIKE ${`${currentStorageRelPath}/%`};
+        `;
+        await tx.$executeRaw`
+          UPDATE files
+          SET
+            storage_rel_path = ${nextStorageRelPath} || substring(storage_rel_path FROM ${currentStorageRelPath.length + 1}),
+            updated_at = ${now}
+          WHERE user_id = ${userId}
+            AND storage_rel_path LIKE ${`${currentStorageRelPath}/%`};
+        `;
 
         return tx.folder.update({
           data: {
@@ -591,7 +780,54 @@ export class PrismaLibraryService implements LibraryServiceContract {
         });
       });
 
-      return toFolderRecord(updatedRootFolder);
+      try {
+        await mkdir(this.resolveAbsolutePath(nextParentFolder.storageRelPath), {
+          recursive: true,
+        });
+        await rename(
+          this.resolveAbsolutePath(currentStorageRelPath),
+          this.resolveAbsolutePath(nextStorageRelPath),
+        );
+      } catch (error) {
+        const rollbackNow = new Date();
+
+        await this.prisma
+          .$transaction(async (tx) => {
+            await tx.$executeRaw`
+              UPDATE folders
+              SET
+                storage_rel_path = ${currentStorageRelPath} || substring(storage_rel_path FROM ${nextStorageRelPath.length + 1}),
+                updated_at = ${rollbackNow}
+              WHERE user_id = ${userId}
+                AND storage_rel_path LIKE ${`${nextStorageRelPath}/%`};
+            `;
+            await tx.$executeRaw`
+              UPDATE files
+              SET
+                storage_rel_path = ${currentStorageRelPath} || substring(storage_rel_path FROM ${nextStorageRelPath.length + 1}),
+                updated_at = ${rollbackNow}
+              WHERE user_id = ${userId}
+                AND storage_rel_path LIKE ${`${nextStorageRelPath}/%`};
+            `;
+
+            await tx.folder.update({
+              data: {
+                displayName: folder.displayName,
+                parentFolderId: folder.parentFolderId,
+                storageRelPath: currentStorageRelPath,
+                updatedAt: rollbackNow,
+              },
+              where: {
+                id: folder.id,
+              },
+            });
+          })
+          .catch(() => undefined);
+
+        throw error;
+      }
+
+      return toFolderRecord(updatedFolder);
     }
 
     const updatedFolder = await this.prisma.folder.update({
@@ -618,12 +854,27 @@ export class PrismaLibraryService implements LibraryServiceContract {
 
     const uploadItem = await this.getOwnedUploadItem(userId, itemId);
 
-    if (uploadItem.status === 'uploading') {
-      throw new ConflictError('Upload item is already processing.');
-    }
-
     if (uploadItem.status === 'complete' && uploadItem.fileId !== null) {
       return this.getFile(userId, uploadItem.fileId);
+    }
+
+    const claimed = await this.claimUploadItemForContentUpload(userId, uploadItem.id);
+
+    if (!claimed) {
+      const currentUploadItem = await this.getOwnedUploadItem(userId, itemId);
+
+      if (
+        currentUploadItem.status === 'complete' &&
+        currentUploadItem.fileId !== null
+      ) {
+        return this.getFile(userId, currentUploadItem.fileId);
+      }
+
+      if (currentUploadItem.status === 'uploading') {
+        throw new ConflictError('Upload item is already processing.');
+      }
+
+      throw new ConflictError('Upload item could not be claimed for processing.');
     }
 
     const batch = await this.getOwnedUploadBatch(userId, uploadItem.batchId);
@@ -647,17 +898,6 @@ export class PrismaLibraryService implements LibraryServiceContract {
       storedExtension,
     );
     const now = new Date();
-
-    await this.prisma.uploadItem.update({
-      data: {
-        errorCode: null,
-        status: 'uploading',
-        updatedAt: now,
-      },
-      where: {
-        id: uploadItem.id,
-      },
-    });
 
     await mkdir(path.dirname(tempAbsolutePath), { recursive: true });
     await mkdir(this.resolveAbsolutePath(folder.storageRelPath), {
@@ -694,8 +934,9 @@ export class PrismaLibraryService implements LibraryServiceContract {
           },
         });
 
-        await tx.uploadItem.update({
+        const completedUpdate = await tx.uploadItem.updateMany({
           data: {
+            errorCode: null,
             fileId: createdFile.id,
             originalName: effectiveOriginalName,
             status: 'complete',
@@ -703,8 +944,14 @@ export class PrismaLibraryService implements LibraryServiceContract {
           },
           where: {
             id: uploadItem.id,
+            status: 'uploading',
+            userId,
           },
         });
+
+        if (completedUpdate.count !== 1) {
+          throw new ConflictError('Upload item could not be completed.');
+        }
 
         await this.refreshBatchStatus(batch.id, tx);
 
@@ -713,7 +960,7 @@ export class PrismaLibraryService implements LibraryServiceContract {
 
       return toFileRecord(fileRecord);
     } catch (error) {
-      await this.prisma.uploadItem.update({
+      await this.prisma.uploadItem.updateMany({
         data: {
           errorCode: this.getUploadErrorCode(error),
           status: 'failed',
@@ -721,12 +968,38 @@ export class PrismaLibraryService implements LibraryServiceContract {
         },
         where: {
           id: uploadItem.id,
+          status: 'uploading',
+          userId,
         },
       });
       await this.refreshBatchStatus(batch.id);
       await this.safeUnlink(tempStorageRelPath);
+      await this.safeUnlink(finalStorageRelPath);
       throw error;
     }
+  }
+
+  private async claimUploadItemForContentUpload(
+    userId: string,
+    uploadItemId: string,
+  ): Promise<boolean> {
+    const claimNow = new Date();
+    const claimResult = await this.prisma.uploadItem.updateMany({
+      data: {
+        errorCode: null,
+        status: 'uploading',
+        updatedAt: claimNow,
+      },
+      where: {
+        id: uploadItemId,
+        status: {
+          in: ['failed', 'pending'],
+        },
+        userId,
+      },
+    });
+
+    return claimResult.count === 1;
   }
 
   private async assertFolderMoveIsValid(
@@ -756,7 +1029,23 @@ export class PrismaLibraryService implements LibraryServiceContract {
     displayName: string,
     currentFolderId: string | null,
   ): Promise<void> {
-    const conflictingFolder = await this.prisma.folder.findFirst({
+    await this.assertSiblingFolderNameAvailableWithClient(
+      this.prisma,
+      userId,
+      parentFolderId,
+      displayName,
+      currentFolderId,
+    );
+  }
+
+  private async assertSiblingFolderNameAvailableWithClient(
+    client: PrismaDatabaseClient,
+    userId: string,
+    parentFolderId: string,
+    displayName: string,
+    currentFolderId: string | null,
+  ): Promise<void> {
+    const conflictingFolder = await client.folder.findFirst({
       where: {
         displayName,
         id: currentFolderId === null ? undefined : { not: currentFolderId },
@@ -770,36 +1059,97 @@ export class PrismaLibraryService implements LibraryServiceContract {
     }
   }
 
+  public async cleanupDirectoryAfterFailedFolderWrite(
+    storageRelPath: string | null,
+  ): Promise<void> {
+    if (storageRelPath === null) {
+      return;
+    }
+
+    const persistedFolder = await this.prisma.folder.findFirst({
+      select: {
+        id: true,
+      },
+      where: {
+        storageRelPath,
+      },
+    });
+
+    if (persistedFolder !== null) {
+      return;
+    }
+
+    try {
+      await rm(this.resolveAbsolutePath(storageRelPath), {
+        force: true,
+        recursive: true,
+      });
+    } catch (error) {
+      if (this.isFsErrorCode(error, 'ENOENT')) {
+        return;
+      }
+
+      throw error;
+    }
+  }
+
+  private async findUserRootFolder(
+    client: PrismaDatabaseClient,
+    userId: string,
+  ): Promise<Folder | null> {
+    return client.folder.findFirst({
+      where: {
+        isRoot: true,
+        userId,
+      },
+    });
+  }
+
   private async getDescendantFolders(
     userId: string,
     folderId: string,
   ): Promise<FolderRecord[]> {
-    const descendants: FolderRecord[] = [];
-    const stack = [folderId];
+    return this.prisma.$queryRaw<FolderRecord[]>`
+      WITH RECURSIVE folder_tree AS (
+        SELECT
+          id,
+          user_id AS "userId",
+          parent_folder_id AS "parentFolderId",
+          display_name AS "displayName",
+          is_root AS "isRoot",
+          storage_rel_path AS "storageRelPath",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM folders
+        WHERE id = ${folderId} AND user_id = ${userId}
 
-    while (stack.length > 0) {
-      const currentFolderId = stack.pop();
+        UNION ALL
 
-      if (currentFolderId === undefined) {
-        continue;
-      }
-
-      const children = await this.prisma.folder.findMany({
-        where: {
-          parentFolderId: currentFolderId,
-          userId,
-        },
-      });
-
-      for (const childFolder of children) {
-        const mappedChildFolder = toFolderRecord(childFolder);
-
-        descendants.push(mappedChildFolder);
-        stack.push(childFolder.id);
-      }
-    }
-
-    return descendants;
+        SELECT
+          f.id,
+          f.user_id AS "userId",
+          f.parent_folder_id AS "parentFolderId",
+          f.display_name AS "displayName",
+          f.is_root AS "isRoot",
+          f.storage_rel_path AS "storageRelPath",
+          f.created_at AS "createdAt",
+          f.updated_at AS "updatedAt"
+        FROM folders f
+        INNER JOIN folder_tree t ON f.parent_folder_id = t.id
+        WHERE f.user_id = ${userId}
+      )
+      SELECT
+        id,
+        "userId",
+        "parentFolderId",
+        "displayName",
+        "isRoot",
+        "storageRelPath",
+        "createdAt",
+        "updatedAt"
+      FROM folder_tree
+      WHERE id <> ${folderId};
+    `;
   }
 
   private async getOwnedFile(userId: string, fileId: string): Promise<File> {
@@ -821,7 +1171,15 @@ export class PrismaLibraryService implements LibraryServiceContract {
     userId: string,
     folderId: string,
   ): Promise<Folder> {
-    const folder = await this.prisma.folder.findFirst({
+    return this.getOwnedFolderWithClient(this.prisma, userId, folderId);
+  }
+
+  private async getOwnedFolderWithClient(
+    client: PrismaDatabaseClient,
+    userId: string,
+    folderId: string,
+  ): Promise<Folder> {
+    const folder = await client.folder.findFirst({
       where: {
         id: folderId,
         userId,
@@ -934,6 +1292,68 @@ export class PrismaLibraryService implements LibraryServiceContract {
     return ensureWithinStorageRoot(this.storageRoot, storageRelPath);
   }
 
+  private async assertStoragePathExists(
+    storageRelPath: string,
+    message: string,
+  ): Promise<void> {
+    try {
+      await stat(this.resolveAbsolutePath(storageRelPath));
+    } catch (error) {
+      if (this.isFsErrorCode(error, 'ENOENT')) {
+        throw new ConflictError(message);
+      }
+
+      throw error;
+    }
+  }
+
+  private async assertStoragePathDoesNotExist(storageRelPath: string): Promise<void> {
+    try {
+      await stat(this.resolveAbsolutePath(storageRelPath));
+    } catch (error) {
+      if (this.isFsErrorCode(error, 'ENOENT')) {
+        return;
+      }
+
+      throw error;
+    }
+
+    throw new ConflictError('Destination already exists on disk.');
+  }
+
+  private async purgeStagedStoragePath(
+    stagedDelete: StagedStorageDelete | null,
+  ): Promise<void> {
+    if (stagedDelete === null) {
+      return;
+    }
+
+    await rm(this.resolveAbsolutePath(stagedDelete.stageRootRelPath), {
+      force: true,
+      recursive: true,
+    });
+  }
+
+  private async restoreStagedStoragePath(
+    stagedDelete: StagedStorageDelete | null,
+  ): Promise<void> {
+    if (stagedDelete === null) {
+      return;
+    }
+
+    await mkdir(
+      path.dirname(this.resolveAbsolutePath(stagedDelete.originalStorageRelPath)),
+      {
+        recursive: true,
+      },
+    );
+    await rename(
+      this.resolveAbsolutePath(stagedDelete.stagedStorageRelPath),
+      this.resolveAbsolutePath(stagedDelete.originalStorageRelPath),
+    );
+    await this.purgeStagedStoragePath(stagedDelete);
+  }
+
   private async safeUnlink(storageRelPath: string): Promise<void> {
     try {
       await unlink(this.resolveAbsolutePath(storageRelPath));
@@ -950,6 +1370,44 @@ export class PrismaLibraryService implements LibraryServiceContract {
 
       throw error;
     }
+  }
+
+  private async stageStoragePathForDeletion(
+    userId: string,
+    storageRelPath: string,
+  ): Promise<StagedStorageDelete | null> {
+    const stageId = randomUUID();
+    const stageRootRelPath = this.buildUserTmpRelPath(userId, 'trash', stageId);
+    const stagedStorageRelPath = path.posix.join(
+      stageRootRelPath,
+      path.posix.basename(storageRelPath),
+    );
+    const stagedDelete: StagedStorageDelete = {
+      originalStorageRelPath: storageRelPath,
+      stageRootRelPath,
+      stagedStorageRelPath,
+    };
+
+    await mkdir(path.dirname(this.resolveAbsolutePath(stagedStorageRelPath)), {
+      recursive: true,
+    });
+
+    try {
+      await rename(
+        this.resolveAbsolutePath(storageRelPath),
+        this.resolveAbsolutePath(stagedStorageRelPath),
+      );
+    } catch (error) {
+      await this.purgeStagedStoragePath(stagedDelete);
+
+      if (this.isFsErrorCode(error, 'ENOENT')) {
+        return null;
+      }
+
+      throw error;
+    }
+
+    return stagedDelete;
   }
 
   private async streamMultipartFile(
@@ -983,4 +1441,10 @@ export class PrismaLibraryService implements LibraryServiceContract {
       sizeBytes,
     };
   }
+}
+
+interface StagedStorageDelete {
+  originalStorageRelPath: string;
+  stageRootRelPath: string;
+  stagedStorageRelPath: string;
 }

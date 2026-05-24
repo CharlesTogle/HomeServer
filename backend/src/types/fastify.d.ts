@@ -9,6 +9,7 @@ import type {
   AuthenticatedSession,
   DatabaseConnectionState,
 } from './domain.js';
+import type { ServerConfig } from '../utils/env.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -20,6 +21,7 @@ declare module 'fastify' {
     database: DatabaseConnectionState;
     libraryService: LibraryServiceContract;
     prisma: PrismaClient | null;
+    serverConfig: ServerConfig;
     store: InMemoryHomeServerStore | null;
     storageRoot: string;
   }

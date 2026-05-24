@@ -11,6 +11,5 @@ export interface LoginInput {
 
 export interface AuthSession {
   accessToken: string
-  expiresAt: string
   user: SessionUser
 }

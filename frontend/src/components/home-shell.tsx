@@ -1,91 +1,79 @@
-import { LoaderCircle, LogOut } from "lucide-react";
-import { startTransition, useState } from "react";
-import { useShallow } from "zustand/react/shallow";
-import { ROOT_FOLDER_ID } from "../constants/library.ts";
-import { useLogoutMutation } from "../hooks/use-auth.ts";
+import { LoaderCircle, LogOut } from 'lucide-react'
+import { startTransition, useEffect, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
+import { useLogoutMutation } from '../hooks/use-auth.ts'
 import {
   useCreateFolderMutation,
   useDeleteItemMutation,
+  useFilePreview,
   useFolderContentsQuery,
   useFolderTreeQuery,
   useMoveItemMutation,
   useUploadFilesMutation,
-} from "../hooks/use-library.ts";
-import { cn } from "../lib/cn.ts";
+} from '../hooks/use-library.ts'
+import { cn } from '../lib/cn.ts'
+import { glassPanelClass, ghostButtonClass, sectionHeadingClass } from '../lib/ui.ts'
 import {
-  glassPanelClass,
-  ghostButtonClass,
-  sectionHeadingClass,
-} from "../lib/ui.ts";
-import { prepareItemDownload } from "../services/mock-library-service.ts";
-import { useSessionStore } from "../stores/session-store.ts";
-import { useWorkspaceStore } from "../stores/workspace-store.ts";
-import type {
-  FileRecord,
-  FolderRecord,
-  FolderTreeNode,
-  LibraryItemKind,
-} from "../types/library.ts";
-import { triggerBlobDownload } from "../utils/download.ts";
-import { ConfirmationModal } from "./confirmation-modal.tsx";
-import { CreateFolderModal } from "./create-folder-modal.tsx";
-import { FolderTree } from "./folder-tree.tsx";
-import { LibraryPanel } from "./library-panel.tsx";
-import { MediaViewer } from "./media-viewer.tsx";
-import {
-  MoveItemModal,
-  type MoveDestinationOption,
-} from "./move-item-modal.tsx";
-import { UploadPanel } from "./upload-panel.tsx";
+  findFolderNodeById,
+  prepareFileDownload,
+  prepareFolderDownload,
+} from '../services/library-service.ts'
+import { useWorkspaceStore } from '../stores/workspace-store.ts'
+import type { FileRecord, FolderRecord, FolderTreeNode, LibraryItemKind } from '../types/library.ts'
+import { triggerBlobDownload } from '../utils/download.ts'
+import { ConfirmationModal } from './confirmation-modal.tsx'
+import { CreateFolderModal } from './create-folder-modal.tsx'
+import { FolderTree } from './folder-tree.tsx'
+import { LibraryPanel } from './library-panel.tsx'
+import { MediaViewer } from './media-viewer.tsx'
+import { MoveItemModal, type MoveDestinationOption } from './move-item-modal.tsx'
+import { UploadPanel } from './upload-panel.tsx'
 
 interface DeleteTarget {
-  kind: LibraryItemKind;
-  id: string;
-  name: string;
-  parentId: string | null;
+  kind: LibraryItemKind
+  id: string
+  name: string
+  parentId: string | null
 }
 
 interface MoveTarget {
-  kind: LibraryItemKind;
-  id: string;
-  name: string;
-  parentId: string | null;
+  kind: LibraryItemKind
+  id: string
+  name: string
+  parentId: string | null
 }
 
 interface InspectorTarget {
-  kind: LibraryItemKind;
-  id: string;
-  mode: "preview" | "properties";
+  kind: LibraryItemKind
+  id: string
+  mode: 'preview' | 'properties'
 }
 
-function collectDescendantFolderIds(
-  tree: FolderTreeNode,
-  folderId: string,
-): Set<string> {
+function collectDescendantFolderIds(tree: FolderTreeNode, folderId: string): Set<string> {
   if (tree.folder.id === folderId) {
-    const descendantIds = new Set<string>();
+    const descendantIds = new Set<string>()
 
     function visit(node: FolderTreeNode): void {
       for (const childNode of node.children) {
-        descendantIds.add(childNode.folder.id);
-        visit(childNode);
+        descendantIds.add(childNode.folder.id)
+        visit(childNode)
       }
     }
 
-    visit(tree);
+    visit(tree)
 
-    return descendantIds;
+    return descendantIds
   }
 
   for (const childNode of tree.children) {
-    const descendantIds = collectDescendantFolderIds(childNode, folderId);
+    const descendantIds = collectDescendantFolderIds(childNode, folderId)
 
     if (descendantIds.size > 0) {
-      return descendantIds;
+      return descendantIds
     }
   }
 
-  return new Set<string>();
+  return new Set<string>()
 }
 
 function buildMoveDestinationOptions(
@@ -93,21 +81,16 @@ function buildMoveDestinationOptions(
   target: MoveTarget,
 ): MoveDestinationOption[] {
   const blockedFolderIds =
-    target.kind === "folder"
-      ? collectDescendantFolderIds(tree, target.id)
-      : new Set<string>();
+    target.kind === 'folder' ? collectDescendantFolderIds(tree, target.id) : new Set<string>()
 
-  if (target.kind === "folder") {
-    blockedFolderIds.add(target.id);
+  if (target.kind === 'folder') {
+    blockedFolderIds.add(target.id)
   }
 
-  function visit(
-    node: FolderTreeNode,
-    pathSegments: string[],
-  ): MoveDestinationOption[] {
-    const nextPathSegments = [...pathSegments, node.folder.name];
-    const label = nextPathSegments.join(" / ");
-    const isCurrentParent = node.folder.id === target.parentId;
+  function visit(node: FolderTreeNode, pathSegments: string[]): MoveDestinationOption[] {
+    const nextPathSegments = [...pathSegments, node.folder.name]
+    const label = nextPathSegments.join(' / ')
+    const isCurrentParent = node.folder.id === target.parentId
 
     return [
       {
@@ -115,19 +98,15 @@ function buildMoveDestinationOptions(
         label,
         disabled: isCurrentParent || blockedFolderIds.has(node.folder.id),
       },
-      ...node.children.flatMap((childNode) =>
-        visit(childNode, nextPathSegments),
-      ),
-    ];
+      ...node.children.flatMap((childNode) => visit(childNode, nextPathSegments)),
+    ]
   }
 
-  return visit(tree, []);
+  return visit(tree, [])
 }
 
-function findFirstEnabledDestinationId(
-  destinations: MoveDestinationOption[],
-): string {
-  return destinations.find((destination) => !destination.disabled)?.id ?? "";
+function findFirstEnabledDestinationId(destinations: MoveDestinationOption[]): string {
+  return destinations.find((destination) => !destination.disabled)?.id ?? ''
 }
 
 function getFolderFromContents(
@@ -136,339 +115,348 @@ function getFolderFromContents(
   siblingFolders: FolderRecord[],
 ): FolderRecord | null {
   if (currentFolder.id === folderId) {
-    return currentFolder;
+    return currentFolder
   }
 
-  return siblingFolders.find((folder) => folder.id === folderId) ?? null;
+  return siblingFolders.find((folder) => folder.id === folderId) ?? null
 }
 
 export function HomeShell(): React.JSX.Element {
-  const { clearSession } = useSessionStore(
-    useShallow((state) => ({
-      clearSession: state.clearSession,
-    })),
-  );
-  const {
-    reset,
-    selectedFileId,
-    selectedFolderId,
-    setSelectedFileId,
-    setSelectedFolderId,
-  } = useWorkspaceStore(
-    useShallow((state) => ({
-      reset: state.reset,
-      selectedFileId: state.selectedFileId,
-      selectedFolderId: state.selectedFolderId,
-      setSelectedFileId: state.setSelectedFileId,
-      setSelectedFolderId: state.setSelectedFolderId,
-    })),
-  );
+  const { selectedFileId, selectedFolderId, setSelectedFileId, setSelectedFolderId } =
+    useWorkspaceStore(
+      useShallow((state) => ({
+        selectedFileId: state.selectedFileId,
+        selectedFolderId: state.selectedFolderId,
+        setSelectedFileId: state.setSelectedFileId,
+        setSelectedFolderId: state.setSelectedFolderId,
+      })),
+    )
 
-  const folderTreeQuery = useFolderTreeQuery();
-  const folderContentsQuery = useFolderContentsQuery(selectedFolderId);
-  const createFolderMutation = useCreateFolderMutation();
-  const uploadFilesMutation = useUploadFilesMutation();
-  const deleteItemMutation = useDeleteItemMutation();
-  const moveItemMutation = useMoveItemMutation();
-  const logoutMutation = useLogoutMutation();
+  const folderTreeQuery = useFolderTreeQuery()
+  const folderContentsQuery = useFolderContentsQuery(selectedFolderId, folderTreeQuery.data)
+  const createFolderMutation = useCreateFolderMutation()
+  const uploadFilesMutation = useUploadFilesMutation()
+  const deleteItemMutation = useDeleteItemMutation()
+  const moveItemMutation = useMoveItemMutation()
+  const logoutMutation = useLogoutMutation()
 
-  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
-  const [inspectorTarget, setInspectorTarget] =
-    useState<InspectorTarget | null>(null);
-  const [moveTarget, setMoveTarget] = useState<MoveTarget | null>(null);
-  const [moveDestinationFolderId, setMoveDestinationFolderId] =
-    useState<string>("");
-  const [downloadingItemId, setDownloadingItemId] = useState<string | null>(
-    null,
-  );
-  const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(
-    null,
-  );
-  const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
-  const [isCreateFolderModalOpen, setIsCreateFolderModalOpen] =
-    useState<boolean>(false);
-  const [isSignOutModalOpen, setIsSignOutModalOpen] = useState<boolean>(false);
-  const [newFolderName, setNewFolderName] = useState<string>("");
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
+  const [inspectorTarget, setInspectorTarget] = useState<InspectorTarget | null>(null)
+  const [moveTarget, setMoveTarget] = useState<MoveTarget | null>(null)
+  const [moveDestinationFolderId, setMoveDestinationFolderId] = useState<string>('')
+  const [downloadingItemId, setDownloadingItemId] = useState<string | null>(null)
+  const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(null)
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false)
+  const [isCreateFolderModalOpen, setIsCreateFolderModalOpen] = useState<boolean>(false)
+  const [isSignOutModalOpen, setIsSignOutModalOpen] = useState<boolean>(false)
+  const [newFolderName, setNewFolderName] = useState<string>('')
 
-  const currentContents = folderContentsQuery.data ?? null;
-  const previewFile =
-    currentContents?.files.find((file) => file.id === selectedFileId) ?? null;
+  useEffect(() => {
+    if (folderTreeQuery.data === undefined) {
+      return
+    }
+
+    if (
+      selectedFolderId === null ||
+      findFolderNodeById(folderTreeQuery.data, selectedFolderId) === null
+    ) {
+      setSelectedFolderId(folderTreeQuery.data.folder.id)
+    }
+  }, [folderTreeQuery.data, selectedFolderId, setSelectedFolderId])
+
+  const currentContents = folderContentsQuery.data ?? null
+  const previewFile = currentContents?.files.find((file) => file.id === selectedFileId) ?? null
   const inspectedFile =
-    inspectorTarget?.kind === "file"
-      ? (currentContents?.files.find(
-          (file) => file.id === inspectorTarget.id,
-        ) ?? null)
-      : null;
+    inspectorTarget?.kind === 'file'
+      ? currentContents?.files.find((file) => file.id === inspectorTarget.id) ?? null
+      : null
   const inspectedFolder =
-    inspectorTarget?.kind === "folder" && currentContents !== null
+    inspectorTarget?.kind === 'folder' && currentContents !== null
       ? getFolderFromContents(
           inspectorTarget.id,
           currentContents.currentFolder,
           currentContents.folders,
         )
-      : null;
-  const activeInspectorFile = inspectedFile ?? previewFile;
+      : null
+  const activeInspectorFile = inspectedFile ?? previewFile
   const activeInspectorMode =
-    inspectorTarget?.mode ??
-    (activeInspectorFile !== null ? "preview" : "properties");
-  const deleteErrorMessage =
-    deleteTarget !== null ? (deleteItemMutation.error?.message ?? null) : null;
-  const moveErrorMessage =
-    moveTarget !== null ? (moveItemMutation.error?.message ?? null) : null;
+    inspectorTarget?.mode ?? (activeInspectorFile !== null ? 'preview' : 'properties')
+  const filePreview = useFilePreview(activeInspectorFile)
+  const deleteErrorMessage = deleteTarget !== null ? deleteItemMutation.error?.message ?? null : null
+  const moveErrorMessage = moveTarget !== null ? moveItemMutation.error?.message ?? null : null
   const busyItemId =
     deleteItemMutation.isPending && deleteTarget !== null
       ? deleteTarget.id
       : moveItemMutation.isPending && moveTarget !== null
         ? moveTarget.id
-        : downloadingItemId;
+        : downloadingItemId
   const moveDestinations =
     moveTarget !== null && folderTreeQuery.data !== undefined
       ? buildMoveDestinationOptions(folderTreeQuery.data, moveTarget)
-      : [];
-  const hasInspector = inspectedFolder !== null;
+      : []
+  const hasInspector = inspectedFolder !== null
+  const rootFolderId = folderTreeQuery.data?.folder.id ?? null
+  const isFolderContentsLoading = selectedFolderId === null || folderContentsQuery.isPending
 
   function resetActionErrors(): void {
-    setActionErrorMessage(null);
-    deleteItemMutation.reset();
-    moveItemMutation.reset();
+    setActionErrorMessage(null)
+    deleteItemMutation.reset()
+    moveItemMutation.reset()
   }
 
   function handleOpenFolder(folderId: string): void {
-    resetActionErrors();
-    setDeleteTarget(null);
-    setMoveTarget(null);
+    resetActionErrors()
+    setDeleteTarget(null)
+    setMoveTarget(null)
 
     startTransition(() => {
-      setSelectedFolderId(folderId);
-      setSelectedFileId(null);
-      setInspectorTarget(null);
-    });
+      setSelectedFolderId(folderId)
+      setSelectedFileId(null)
+      setInspectorTarget(null)
+    })
   }
 
   function handleSelectFile(fileId: string): void {
-    resetActionErrors();
-    setMoveTarget(null);
-    setSelectedFileId(fileId);
-    setInspectorTarget(null);
+    resetActionErrors()
+    setMoveTarget(null)
+    setSelectedFileId(fileId)
+    setInspectorTarget(null)
   }
 
   function handleRequestDeleteFolder(folder: FolderRecord): void {
-    resetActionErrors();
+    resetActionErrors()
     setDeleteTarget({
-      kind: "folder",
+      kind: 'folder',
       id: folder.id,
       name: folder.name,
       parentId: folder.parentId,
-    });
+    })
   }
 
   function handleRequestDeleteFile(file: FileRecord): void {
-    resetActionErrors();
+    resetActionErrors()
     setDeleteTarget({
-      kind: "file",
+      kind: 'file',
       id: file.id,
       name: file.name,
       parentId: file.folderId,
-    });
+    })
   }
 
   function handleRequestMoveFolder(folder: FolderRecord): void {
-    resetActionErrors();
+    resetActionErrors()
 
     if (folderTreeQuery.data === undefined) {
-      setActionErrorMessage("Folder destinations are still loading.");
-      return;
+      setActionErrorMessage('Folder destinations are still loading.')
+      return
     }
 
     const nextTarget: MoveTarget = {
-      kind: "folder",
+      kind: 'folder',
       id: folder.id,
       name: folder.name,
       parentId: folder.parentId,
-    };
-    const destinations = buildMoveDestinationOptions(
-      folderTreeQuery.data,
-      nextTarget,
-    );
+    }
+    const destinations = buildMoveDestinationOptions(folderTreeQuery.data, nextTarget)
 
-    setMoveTarget(nextTarget);
-    setMoveDestinationFolderId(findFirstEnabledDestinationId(destinations));
+    setMoveTarget(nextTarget)
+    setMoveDestinationFolderId(findFirstEnabledDestinationId(destinations))
   }
 
   function handleOpenCreateFolderModal(): void {
-    resetActionErrors();
-    createFolderMutation.reset();
-    setNewFolderName("");
-    setIsCreateFolderModalOpen(true);
+    resetActionErrors()
+    createFolderMutation.reset()
+    setNewFolderName('')
+    setIsCreateFolderModalOpen(true)
   }
 
   function handleRequestMoveFile(file: FileRecord): void {
-    resetActionErrors();
+    resetActionErrors()
 
     if (folderTreeQuery.data === undefined) {
-      setActionErrorMessage("Folder destinations are still loading.");
-      return;
+      setActionErrorMessage('Folder destinations are still loading.')
+      return
     }
 
     const nextTarget: MoveTarget = {
-      kind: "file",
+      kind: 'file',
       id: file.id,
       name: file.name,
       parentId: file.folderId,
-    };
-    const destinations = buildMoveDestinationOptions(
-      folderTreeQuery.data,
-      nextTarget,
-    );
+    }
+    const destinations = buildMoveDestinationOptions(folderTreeQuery.data, nextTarget)
 
-    setMoveTarget(nextTarget);
-    setMoveDestinationFolderId(findFirstEnabledDestinationId(destinations));
+    setMoveTarget(nextTarget)
+    setMoveDestinationFolderId(findFirstEnabledDestinationId(destinations))
   }
 
   function handleRequestShowFolderProperties(folder: FolderRecord): void {
-    resetActionErrors();
-    setMoveTarget(null);
-    setDeleteTarget(null);
+    resetActionErrors()
+    setMoveTarget(null)
+    setDeleteTarget(null)
 
     startTransition(() => {
-      setSelectedFileId(null);
+      setSelectedFileId(null)
       setInspectorTarget({
-        kind: "folder",
+        kind: 'folder',
         id: folder.id,
-        mode: "properties",
-      });
-    });
+        mode: 'properties',
+      })
+    })
   }
 
   function handleRequestShowFileProperties(file: FileRecord): void {
-    resetActionErrors();
-    setMoveTarget(null);
-    setDeleteTarget(null);
+    resetActionErrors()
+    setMoveTarget(null)
+    setDeleteTarget(null)
 
     startTransition(() => {
-      setSelectedFileId(file.id);
+      setSelectedFileId(file.id)
       setInspectorTarget({
-        kind: "file",
+        kind: 'file',
         id: file.id,
-        mode: "properties",
-      });
-    });
+        mode: 'properties',
+      })
+    })
   }
 
-  async function handleRequestDownload(
-    kind: LibraryItemKind,
-    id: string,
-  ): Promise<void> {
-    resetActionErrors();
-    setDownloadingItemId(id);
+  async function handleRequestDownloadFile(file: FileRecord): Promise<void> {
+    resetActionErrors()
+    setDownloadingItemId(file.id)
 
     try {
-      const preparedDownload = await prepareItemDownload({ kind, id });
+      const preparedDownload = await prepareFileDownload(file)
 
-      triggerBlobDownload(preparedDownload.blob, preparedDownload.fileName);
+      triggerBlobDownload(preparedDownload.blob, preparedDownload.fileName)
     } catch (error) {
       setActionErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "The download could not be prepared.",
-      );
+        error instanceof Error ? error.message : 'The download could not be prepared.',
+      )
     } finally {
-      setDownloadingItemId(null);
+      setDownloadingItemId(null)
+    }
+  }
+
+  async function handleRequestDownloadFolder(folder: FolderRecord): Promise<void> {
+    resetActionErrors()
+    setDownloadingItemId(folder.id)
+
+    try {
+      if (folderTreeQuery.data === undefined) {
+        throw new Error('Folder tree is still loading.')
+      }
+
+      const preparedDownload = await prepareFolderDownload(folder, folderTreeQuery.data)
+
+      triggerBlobDownload(preparedDownload.blob, preparedDownload.fileName)
+    } catch (error) {
+      setActionErrorMessage(
+        error instanceof Error ? error.message : 'The folder snapshot could not be prepared.',
+      )
+    } finally {
+      setDownloadingItemId(null)
     }
   }
 
   async function handleConfirmDelete(): Promise<void> {
     if (deleteTarget === null) {
-      return;
+      return
     }
 
     await deleteItemMutation.mutateAsync({
       kind: deleteTarget.kind,
       id: deleteTarget.id,
-    });
+    })
 
     if (selectedFileId === deleteTarget.id) {
-      setSelectedFileId(null);
+      setSelectedFileId(null)
     }
 
     if (inspectorTarget?.id === deleteTarget.id) {
-      setInspectorTarget(null);
+      setInspectorTarget(null)
     }
 
-    if (deleteTarget.kind === "folder") {
+    if (deleteTarget.kind === 'folder') {
       startTransition(() => {
-        setSelectedFolderId(deleteTarget.parentId ?? ROOT_FOLDER_ID);
-        setSelectedFileId(null);
-      });
+        setSelectedFolderId(deleteTarget.parentId ?? rootFolderId)
+        setSelectedFileId(null)
+      })
     }
 
-    setDeleteTarget(null);
+    setDeleteTarget(null)
   }
 
   async function handleConfirmMove(): Promise<void> {
     if (moveTarget === null || moveDestinationFolderId.length === 0) {
-      return;
+      return
     }
 
     await moveItemMutation.mutateAsync({
       kind: moveTarget.kind,
       id: moveTarget.id,
       destinationFolderId: moveDestinationFolderId,
-    });
+    })
 
     if (selectedFileId === moveTarget.id) {
-      setSelectedFileId(null);
+      setSelectedFileId(null)
     }
 
     if (inspectorTarget?.id === moveTarget.id) {
-      setInspectorTarget(null);
+      setInspectorTarget(null)
     }
 
-    setMoveTarget(null);
-    setMoveDestinationFolderId("");
+    setMoveTarget(null)
+    setMoveDestinationFolderId('')
   }
 
   async function handleConfirmCreateFolder(): Promise<void> {
-    resetActionErrors();
+    resetActionErrors()
+
+    if (selectedFolderId === null) {
+      setActionErrorMessage('Select a folder before creating a nested folder.')
+      return
+    }
 
     const createdFolder = await createFolderMutation.mutateAsync({
       parentId: selectedFolderId,
       name: newFolderName,
-    });
+    })
 
-    setNewFolderName("");
-    setIsCreateFolderModalOpen(false);
+    setNewFolderName('')
+    setIsCreateFolderModalOpen(false)
 
     startTransition(() => {
-      setSelectedFolderId(createdFolder.id);
-      setSelectedFileId(null);
-      setInspectorTarget(null);
-    });
+      setSelectedFolderId(createdFolder.id)
+      setSelectedFileId(null)
+      setInspectorTarget(null)
+    })
   }
 
   async function handleUpload(files: File[]): Promise<void> {
-    resetActionErrors();
+    resetActionErrors()
+
+    if (selectedFolderId === null) {
+      setActionErrorMessage('Select a folder before uploading files.')
+      return
+    }
 
     await uploadFilesMutation.mutateAsync({
       folderId: selectedFolderId,
       files,
-    });
+    })
 
-    setSelectedFileId(null);
-    setInspectorTarget(null);
-
-    setIsUploadModalOpen(false);
+    setSelectedFileId(null)
+    setInspectorTarget(null)
+    setIsUploadModalOpen(false)
   }
 
   async function handleConfirmSignOut(): Promise<void> {
-    await logoutMutation.mutateAsync();
-    clearSession();
-    reset();
-    setIsSignOutModalOpen(false);
-    setInspectorTarget(null);
-    setMoveTarget(null);
-    setDeleteTarget(null);
-    setActionErrorMessage(null);
+    await logoutMutation.mutateAsync()
+    setIsSignOutModalOpen(false)
+    setInspectorTarget(null)
+    setMoveTarget(null)
+    setDeleteTarget(null)
+    setActionErrorMessage(null)
   }
 
   return (
@@ -481,24 +469,17 @@ export function HomeShell(): React.JSX.Element {
 
         <div
           className={cn(
-            "relative mx-auto grid w-full max-w-[1680px] gap-4 xl:min-h-[calc(100svh-2rem)]",
+            'relative mx-auto grid w-full max-w-[1680px] gap-4 xl:min-h-[calc(100svh-2rem)]',
             hasInspector
-              ? "xl:grid-cols-[280px_minmax(0,1fr)_380px] 2xl:grid-cols-[300px_minmax(0,1fr)_400px]"
-              : "xl:grid-cols-[280px_minmax(0,1fr)] 2xl:grid-cols-[300px_minmax(0,1fr)]",
+              ? 'xl:grid-cols-[280px_minmax(0,1fr)_380px] 2xl:grid-cols-[300px_minmax(0,1fr)_400px]'
+              : 'xl:grid-cols-[280px_minmax(0,1fr)] 2xl:grid-cols-[300px_minmax(0,1fr)]',
           )}
         >
           <aside className="flex flex-col gap-4 xl:min-h-0">
-            <section
-              className={cn(
-                glassPanelClass,
-                "flex min-h-[280px] flex-col p-4 xl:min-h-0",
-              )}
-            >
+            <section className={cn(glassPanelClass, 'flex min-h-[280px] flex-col p-4 xl:min-h-0')}>
               <div className="space-y-1 px-1 pb-3">
                 <p className={sectionHeadingClass}>Folder atlas</p>
-                <p className="text-sm text-[color:var(--on-surface-variant)]">
-                  Library structure
-                </p>
+                <p className="text-sm text-[color:var(--on-surface-variant)]">Library structure</p>
               </div>
 
               {folderTreeQuery.isPending ? (
@@ -521,7 +502,7 @@ export function HomeShell(): React.JSX.Element {
                 </div>
               ) : null}
 
-              {folderTreeQuery.data !== undefined ? (
+              {folderTreeQuery.data !== undefined && selectedFolderId !== null ? (
                 <div className="min-h-0 flex-1 overflow-y-auto pr-1">
                   <FolderTree
                     tree={folderTreeQuery.data}
@@ -533,7 +514,7 @@ export function HomeShell(): React.JSX.Element {
 
               <div className="mt-4 border-t border-[rgba(218,192,201,0.54)] pt-4">
                 <button
-                  className={cn(ghostButtonClass, "w-full justify-center")}
+                  className={cn(ghostButtonClass, 'w-full justify-center')}
                   type="button"
                   onClick={() => setIsSignOutModalOpen(true)}
                 >
@@ -545,13 +526,8 @@ export function HomeShell(): React.JSX.Element {
           </aside>
 
           <section className="flex min-w-0 flex-col gap-4 xl:min-h-0">
-            {folderContentsQuery.isPending ? (
-              <section
-                className={cn(
-                  glassPanelClass,
-                  "flex min-h-[220px] items-center justify-center p-5",
-                )}
-              >
+            {isFolderContentsLoading ? (
+              <section className={cn(glassPanelClass, 'flex min-h-[220px] items-center justify-center p-5')}>
                 <div className="space-y-2 text-center">
                   <LoaderCircle className="mx-auto size-5 animate-spin text-[color:var(--primary)]" />
                   <p className="text-sm text-[color:var(--on-surface-variant)]">
@@ -562,7 +538,7 @@ export function HomeShell(): React.JSX.Element {
             ) : null}
 
             {folderContentsQuery.error !== null ? (
-              <section className={cn(glassPanelClass, "p-5")}>
+              <section className={cn(glassPanelClass, 'p-5')}>
                 <div
                   className="rounded-[22px] border border-[color:var(--error-container)] bg-[color:var(--error-container)] px-4 py-3 text-sm text-[color:var(--on-error-container)]"
                   role="alert"
@@ -573,7 +549,7 @@ export function HomeShell(): React.JSX.Element {
             ) : null}
 
             {actionErrorMessage !== null ? (
-              <section className={cn(glassPanelClass, "p-5")}>
+              <section className={cn(glassPanelClass, 'p-5')}>
                 <div
                   className="rounded-[22px] border border-[color:var(--error-container)] bg-[color:var(--error-container)] px-4 py-3 text-sm text-[color:var(--on-error-container)]"
                   role="alert"
@@ -595,16 +571,14 @@ export function HomeShell(): React.JSX.Element {
                 onRequestDeleteFolder={handleRequestDeleteFolder}
                 onRequestDeleteFile={handleRequestDeleteFile}
                 onRequestDownloadFolder={(folder) => {
-                  void handleRequestDownload("folder", folder.id);
+                  void handleRequestDownloadFolder(folder)
                 }}
                 onRequestDownloadFile={(file) => {
-                  void handleRequestDownload("file", file.id);
+                  void handleRequestDownloadFile(file)
                 }}
                 onRequestMoveFolder={handleRequestMoveFolder}
                 onRequestMoveFile={handleRequestMoveFile}
-                onRequestShowFolderProperties={
-                  handleRequestShowFolderProperties
-                }
+                onRequestShowFolderProperties={handleRequestShowFolderProperties}
                 onRequestShowFileProperties={handleRequestShowFileProperties}
                 onSelectFile={handleSelectFile}
               />
@@ -616,13 +590,16 @@ export function HomeShell(): React.JSX.Element {
               <MediaViewer
                 currentFolderName={currentContents?.currentFolder.name ?? null}
                 inspectedFolder={inspectedFolder}
+                isPreviewLoading={false}
                 mode="properties"
+                previewErrorMessage={null}
+                previewUrl={null}
                 selectedFile={null}
                 onClose={() => {
                   startTransition(() => {
-                    setSelectedFileId(null);
-                    setInspectorTarget(null);
-                  });
+                    setSelectedFileId(null)
+                    setInspectorTarget(null)
+                  })
                 }}
               />
             </aside>
@@ -634,13 +611,16 @@ export function HomeShell(): React.JSX.Element {
         <MediaViewer
           currentFolderName={currentContents?.currentFolder.name ?? null}
           inspectedFolder={null}
+          isPreviewLoading={filePreview.isPending}
           mode={activeInspectorMode}
+          previewErrorMessage={filePreview.error?.message ?? null}
+          previewUrl={filePreview.previewUrl}
           selectedFile={activeInspectorFile}
           onClose={() => {
             startTransition(() => {
-              setSelectedFileId(null);
-              setInspectorTarget(null);
-            });
+              setSelectedFileId(null)
+              setInspectorTarget(null)
+            })
           }}
         />
       ) : null}
@@ -662,12 +642,12 @@ export function HomeShell(): React.JSX.Element {
         isPending={createFolderMutation.isPending}
         onChangeFolderName={setNewFolderName}
         onCancel={() => {
-          setIsCreateFolderModalOpen(false);
-          setNewFolderName("");
-          createFolderMutation.reset();
+          setIsCreateFolderModalOpen(false)
+          setNewFolderName('')
+          createFolderMutation.reset()
         }}
         onConfirm={() => {
-          void handleConfirmCreateFolder();
+          void handleConfirmCreateFolder()
         }}
       />
 
@@ -677,48 +657,46 @@ export function HomeShell(): React.JSX.Element {
         destinations={moveDestinations}
         errorMessage={moveErrorMessage}
         isPending={moveItemMutation.isPending}
-        itemKind={moveTarget?.kind ?? "file"}
-        itemName={moveTarget?.name ?? ""}
+        itemKind={moveTarget?.kind ?? 'file'}
+        itemName={moveTarget?.name ?? ''}
         onCancel={() => {
-          setMoveTarget(null);
-          setMoveDestinationFolderId("");
-          moveItemMutation.reset();
+          setMoveTarget(null)
+          setMoveDestinationFolderId('')
+          moveItemMutation.reset()
         }}
         onChangeDestination={setMoveDestinationFolderId}
         onConfirm={() => {
-          void handleConfirmMove();
+          void handleConfirmMove()
         }}
       />
 
       <ConfirmationModal
         open={deleteTarget !== null}
         title={
-          deleteTarget?.kind === "folder"
+          deleteTarget?.kind === 'folder'
             ? `Delete folder “${deleteTarget.name}”?`
-            : `Delete file “${deleteTarget?.name ?? ""}”?`
+            : `Delete file “${deleteTarget?.name ?? ''}”?`
         }
         description={
-          deleteTarget?.kind === "folder"
-            ? "Only empty folders can be removed right now."
-            : "This removes the file from the current library."
+          deleteTarget?.kind === 'folder'
+            ? 'This will remove the folder and any nested files or folders from the backend after confirmation.'
+            : 'This removes the file from the backend and the current library view.'
         }
-        confirmLabel={
-          deleteTarget?.kind === "folder" ? "Delete folder" : "Delete file"
-        }
+        confirmLabel={deleteTarget?.kind === 'folder' ? 'Delete folder' : 'Delete file'}
         cancelLabel="Keep it"
         tone="danger"
         isPending={deleteItemMutation.isPending}
         errorMessage={deleteErrorMessage}
         onCancel={() => setDeleteTarget(null)}
         onConfirm={() => {
-          void handleConfirmDelete();
+          void handleConfirmDelete()
         }}
       />
 
       <ConfirmationModal
         open={isSignOutModalOpen}
         title="Sign out?"
-        description="This signs you out and resets the workspace."
+        description="This clears the in-memory access token and falls back to the refresh cookie flow on the next load."
         confirmLabel="Sign out"
         cancelLabel="Stay signed in"
         tone="neutral"
@@ -726,9 +704,9 @@ export function HomeShell(): React.JSX.Element {
         errorMessage={logoutMutation.error?.message ?? null}
         onCancel={() => setIsSignOutModalOpen(false)}
         onConfirm={() => {
-          void handleConfirmSignOut();
+          void handleConfirmSignOut()
         }}
       />
     </>
-  );
+  )
 }

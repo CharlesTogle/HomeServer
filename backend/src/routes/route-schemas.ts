@@ -18,6 +18,42 @@ export const authResponseSchema = {
   type: 'object',
 } as const;
 
+export const folderParamsSchema = {
+  additionalProperties: false,
+  properties: {
+    folderId: { minLength: 1, type: 'string' },
+  },
+  required: ['folderId'],
+  type: 'object',
+} as const;
+
+export const fileParamsSchema = {
+  additionalProperties: false,
+  properties: {
+    fileId: { minLength: 1, type: 'string' },
+  },
+  required: ['fileId'],
+  type: 'object',
+} as const;
+
+export const uploadBatchParamsSchema = {
+  additionalProperties: false,
+  properties: {
+    batchId: { minLength: 1, type: 'string' },
+  },
+  required: ['batchId'],
+  type: 'object',
+} as const;
+
+export const uploadItemParamsSchema = {
+  additionalProperties: false,
+  properties: {
+    itemId: { minLength: 1, type: 'string' },
+  },
+  required: ['itemId'],
+  type: 'object',
+} as const;
+
 export const folderResponseSchema = {
   additionalProperties: false,
   properties: {
@@ -29,6 +65,16 @@ export const folderResponseSchema = {
     updatedAt: { type: 'string' },
   },
   required: ['createdAt', 'id', 'isRoot', 'name', 'parentFolderId', 'updatedAt'],
+  type: 'object',
+} as const;
+
+export const folderTreeFolderResponseSchema = {
+  additionalProperties: false,
+  properties: {
+    ...folderResponseSchema.properties,
+    itemCount: { type: 'number' },
+  },
+  required: [...folderResponseSchema.required, 'itemCount'],
   type: 'object',
 } as const;
 
@@ -75,6 +121,18 @@ export const folderEntriesResponseSchema = {
     },
   },
   required: ['files', 'folder', 'folders'],
+  type: 'object',
+} as const;
+
+export const folderTreeResponseSchema = {
+  additionalProperties: false,
+  properties: {
+    folders: {
+      items: folderTreeFolderResponseSchema,
+      type: 'array',
+    },
+  },
+  required: ['folders'],
   type: 'object',
 } as const;
 

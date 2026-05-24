@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import {
   useMutation,
   useQuery,
@@ -8,11 +9,13 @@ import {
 import {
   createFolder,
   deleteItem,
+  getFilePreviewBlob,
   getFolderContents,
   getFolderTree,
+  isPreviewableFile,
   moveItem,
   uploadFiles,
-} from '../services/mock-library-service.ts'
+} from '../services/library-service.ts'
 import type {
   CreateFolderInput,
   DeleteItemInput,
@@ -37,10 +40,20 @@ export function useFolderTreeQuery(): UseQueryResult<FolderTreeNode, Error> {
   })
 }
 
-export function useFolderContentsQuery(folderId: string): UseQueryResult<FolderContents, Error> {
+export function useFolderContentsQuery(
+  folderId: string | null,
+  tree: FolderTreeNode | undefined,
+): UseQueryResult<FolderContents, Error> {
   return useQuery({
-    queryKey: libraryQueryKeys.contents(folderId),
-    queryFn: () => getFolderContents(folderId),
+    enabled: folderId !== null && tree !== undefined,
+    queryKey: libraryQueryKeys.contents(folderId ?? 'none'),
+    queryFn: async () => {
+      if (folderId === null || tree === undefined) {
+        throw new Error('Folder contents query requires both a folder id and tree snapshot.')
+      }
+
+      return await getFolderContents(folderId, tree)
+    },
   })
 }
 
@@ -90,4 +103,45 @@ export function useMoveItemMutation(): UseMutationResult<void, Error, MoveItemIn
       await queryClient.invalidateQueries({ queryKey: libraryQueryKeys.all })
     },
   })
+}
+
+export function useFilePreview(file: FileRecord | null): {
+  error: Error | null
+  isPending: boolean
+  previewUrl: string | null
+} {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const previewQuery = useQuery({
+    enabled: file !== null && isPreviewableFile(file),
+    queryKey: ['library', 'file-preview', file?.id ?? 'none', file?.updatedAt ?? 'none'],
+    queryFn: async () => {
+      if (file === null) {
+        throw new Error('A file is required before fetching preview bytes.')
+      }
+
+      return await getFilePreviewBlob(file)
+    },
+    staleTime: Number.POSITIVE_INFINITY,
+  })
+
+  useEffect(() => {
+    if (previewQuery.data === undefined) {
+      setPreviewUrl(null)
+      return
+    }
+
+    const nextPreviewUrl = URL.createObjectURL(previewQuery.data)
+
+    setPreviewUrl(nextPreviewUrl)
+
+    return () => {
+      URL.revokeObjectURL(nextPreviewUrl)
+    }
+  }, [previewQuery.data])
+
+  return {
+    error: previewQuery.error ?? null,
+    isPending: previewQuery.isPending,
+    previewUrl,
+  }
 }

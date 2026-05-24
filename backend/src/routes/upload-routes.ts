@@ -11,7 +11,9 @@ import {
 import { UnauthorizedError } from '../utils/http-errors.js';
 import {
   fileResponseSchema,
+  uploadBatchParamsSchema,
   uploadBatchResponseSchema,
+  uploadItemParamsSchema,
   uploadItemResponseSchema,
 } from './route-schemas.js';
 
@@ -70,6 +72,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
     {
       preHandler: app.authenticate,
       schema: {
+        params: uploadBatchParamsSchema,
         response: {
           200: uploadBatchResponseSchema,
         },
@@ -99,6 +102,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
           required: ['clientIdempotencyKey', 'originalName'],
           type: 'object',
         },
+        params: uploadBatchParamsSchema,
         response: {
           201: uploadItemResponseSchema,
         },
@@ -122,6 +126,7 @@ export async function uploadRoutes(app: FastifyInstance): Promise<void> {
     {
       preHandler: app.authenticate,
       schema: {
+        params: uploadItemParamsSchema,
         response: {
           201: fileResponseSchema,
         },

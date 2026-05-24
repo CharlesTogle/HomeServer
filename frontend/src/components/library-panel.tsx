@@ -76,16 +76,6 @@ function FileIcon(props: { file: FileRecord }): React.JSX.Element {
 }
 
 function FileVisual(props: { file: FileRecord }): React.JSX.Element {
-  if (props.file.posterUrl !== null) {
-    return (
-      <img
-        src={props.file.posterUrl}
-        alt={`Preview of ${props.file.name}`}
-        className="h-full w-full object-cover"
-      />
-    )
-  }
-
   return (
     <div className="flex aspect-[4/3] items-center justify-center bg-[rgba(61,0,38,0.94)] text-[color:var(--inverse-primary)]">
       <FileIcon file={props.file} />
@@ -516,9 +506,7 @@ export function LibraryPanel(props: LibraryPanelProps): React.JSX.Element {
 
                       <div className="mt-4 flex items-center justify-between gap-3 px-1">
                         <span className="text-xs font-semibold uppercase tracking-[0.16em] text-[color:var(--secondary)]">
-                          {file.source === 'uploaded'
-                            ? 'Uploaded this session'
-                            : `Added ${formatRelativeTime(file.createdAt)}`}
+                          Added {formatRelativeTime(file.createdAt)}
                         </span>
                         <ItemActionMenu
                           menuId={menuId}

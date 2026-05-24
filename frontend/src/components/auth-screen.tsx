@@ -4,7 +4,6 @@ import {
   Lock,
 } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
-import { cn } from '../lib/cn.ts'
 import {
   fieldInputClass,
   fieldLabelClass,
@@ -15,14 +14,11 @@ import {
   sectionSubtextClass,
 } from '../lib/ui.ts'
 import { useLoginMutation } from '../hooks/use-auth.ts'
-import { useSessionStore } from '../stores/session-store.ts'
-import type { AuthSession } from '../types/auth.ts'
 
 const defaultEmail = 'admin@homeserver.tailnet'
 const defaultPassword = 'media-demo'
 
 export function AuthScreen(): React.JSX.Element {
-  const setSession = useSessionStore((state) => state.setSession)
   const loginMutation = useLoginMutation()
   const [email, setEmail] = useState<string>(defaultEmail)
   const [password, setPassword] = useState<string>(defaultPassword)
@@ -30,12 +26,10 @@ export function AuthScreen(): React.JSX.Element {
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
 
-    const session: AuthSession = await loginMutation.mutateAsync({
+    await loginMutation.mutateAsync({
       email,
       password,
     })
-
-    setSession(session)
   }
 
   return (
@@ -46,7 +40,7 @@ export function AuthScreen(): React.JSX.Element {
       />
 
       <div className="relative mx-auto flex min-h-[calc(100svh-2rem)] w-full max-w-[560px] items-center">
-        <section className={cn(glassPanelClass, 'w-full flex flex-col gap-6 p-6 sm:p-8 lg:p-10')}>
+        <section className={`${glassPanelClass} w-full flex flex-col gap-6 p-6 sm:p-8 lg:p-10`}>
           <div className="space-y-4">
             <span className={pillClass}>
               <Lock className="size-4" />
@@ -56,11 +50,10 @@ export function AuthScreen(): React.JSX.Element {
             <div className="space-y-3">
               <p className={sectionHeadingClass}>Private workspace access</p>
               <h2 className="text-[clamp(2.25rem,3vw,3.15rem)] font-semibold leading-[1.02] tracking-[-0.03em] text-[color:var(--on-surface)]">
-                Enter your library atelier
+                Enter your private library
               </h2>
               <p className={sectionSubtextClass}>
-                The current mock flow mints a short-lived in-memory token and leaves the rest of
-                the auth contract ready for the backend.
+                Sign in with an in-memory access token and let the refresh cookie keep the session alive.
               </p>
             </div>
           </div>
@@ -80,7 +73,7 @@ export function AuthScreen(): React.JSX.Element {
                 onChange={(event) => setEmail(event.currentTarget.value)}
               />
               <span className="text-sm text-[color:var(--secondary)]">
-                Suggested demo: {defaultEmail}
+                Suggested local account: {defaultEmail}
               </span>
             </div>
 
@@ -111,7 +104,11 @@ export function AuthScreen(): React.JSX.Element {
               </div>
             ) : null}
 
-            <button className={cn(primaryButtonClass, 'w-full')} type="submit" disabled={loginMutation.isPending}>
+            <button
+              className={`${primaryButtonClass} w-full`}
+              type="submit"
+              disabled={loginMutation.isPending}
+            >
               {loginMutation.isPending ? (
                 <LoaderCircle className="size-4 animate-spin" />
               ) : (

@@ -21,6 +21,7 @@ import type {
   CreateUploadItemInput,
   FileReadDescriptor,
   FolderEntries,
+  FolderTreeFolder,
   LibraryServiceContract,
   UpdateFileInput,
   UpdateFolderInput,
@@ -318,6 +319,43 @@ export class LibraryService implements LibraryServiceContract {
       folder,
       folders: childFolders,
     };
+  }
+
+  public async listFolders(userId: string): Promise<FolderTreeFolder[]> {
+    const folders = [...this.store.folders.values()]
+      .filter((folderRecord) => folderRecord.userId === userId)
+      .sort((left, right) => left.displayName.localeCompare(right.displayName));
+    const childFolderCountByParentId = new Map<string, number>();
+    const fileCountByFolderId = new Map<string, number>();
+
+    for (const folder of folders) {
+      if (folder.parentFolderId === null) {
+        continue;
+      }
+
+      childFolderCountByParentId.set(
+        folder.parentFolderId,
+        (childFolderCountByParentId.get(folder.parentFolderId) ?? 0) + 1,
+      );
+    }
+
+    for (const file of this.store.files.values()) {
+      if (file.userId !== userId) {
+        continue;
+      }
+
+      fileCountByFolderId.set(
+        file.folderId,
+        (fileCountByFolderId.get(file.folderId) ?? 0) + 1,
+      );
+    }
+
+    return folders.map((folder) => ({
+      folder,
+      itemCount:
+        (childFolderCountByParentId.get(folder.id) ?? 0) +
+        (fileCountByFolderId.get(folder.id) ?? 0),
+    }));
   }
 
   public async getRootFolder(userId: string): Promise<FolderRecord> {

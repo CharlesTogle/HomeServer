@@ -1,3 +1,4 @@
+import type { FolderTreeFolder } from '../services/contracts.js';
 import type {
   FileRecord,
   FolderRecord,
@@ -42,6 +43,14 @@ export interface FolderEntriesResponse {
   files: FileResponse[];
   folder: FolderResponse;
   folders: FolderResponse[];
+}
+
+export interface FolderTreeFolderResponse extends FolderResponse {
+  itemCount: number;
+}
+
+export interface FolderTreeResponse {
+  folders: FolderTreeFolderResponse[];
 }
 
 export interface UploadItemResponse {
@@ -102,6 +111,23 @@ export function toFolderEntriesResponse(
     files: files.map(toFileResponse),
     folder: toFolderResponse(folder),
     folders: folders.map(toFolderResponse),
+  };
+}
+
+export function toFolderTreeFolderResponse(
+  entry: FolderTreeFolder,
+): FolderTreeFolderResponse {
+  return {
+    ...toFolderResponse(entry.folder),
+    itemCount: entry.itemCount,
+  };
+}
+
+export function toFolderTreeResponse(
+  folders: FolderTreeFolder[],
+): FolderTreeResponse {
+  return {
+    folders: folders.map((entry) => toFolderTreeFolderResponse(entry)),
   };
 }
 

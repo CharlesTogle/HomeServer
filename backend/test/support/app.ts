@@ -6,19 +6,33 @@ import assert from 'node:assert/strict';
 import { type FastifyInstance } from 'fastify';
 
 import { buildApp } from '../../src/app.js';
+import {
+  createInMemoryTestServerConfig,
+  type ServerConfig,
+} from '../../src/utils/env.js';
 import type {
-  AuthResponse,
   FileResponse,
   FolderResponse,
   UploadBatchResponse,
   UploadItemResponse,
 } from '../../src/types/api.js';
+import { REFRESH_COOKIE_NAME } from '../../src/utils/cookies.js';
 import type { FileFixture, UserFixture } from './faker.js';
 
-interface RegisteredUser {
+interface SeededUserSession {
   accessToken: string;
   refreshCookie: string;
   userId: string;
+}
+
+interface PreviousEnv {
+  AUTH_TOKEN_SECRET: string | undefined;
+  DATABASE_URL: string | undefined;
+  HOMESERVER_TEST_MODE: string | undefined;
+  NODE_ENV: string | undefined;
+  PORT: string | undefined;
+  REFRESH_TOKEN_TTL_SECONDS: string | undefined;
+  STORAGE_ROOT: string | undefined;
 }
 
 export interface TestAppContext {
@@ -26,23 +40,30 @@ export interface TestAppContext {
   cleanup: () => Promise<void>;
 }
 
+export type TestAppContextFactory = () => Promise<TestAppContext>;
+
 export async function createTestAppContext(): Promise<TestAppContext> {
+  return createInMemoryTestAppContext();
+}
+
+export async function createInMemoryTestAppContext(): Promise<TestAppContext> {
   const storageRoot = await mkdtemp(path.join(os.tmpdir(), 'homeserver-backend-'));
-  const previousEnv = {
-    AUTH_TOKEN_SECRET: process.env.AUTH_TOKEN_SECRET,
-    DATABASE_URL: process.env.DATABASE_URL,
-    NODE_ENV: process.env.NODE_ENV,
-    PORT: process.env.PORT,
-    STORAGE_ROOT: process.env.STORAGE_ROOT,
-  };
+  const previousEnv = captureEnv();
 
   process.env.AUTH_TOKEN_SECRET = 'homeserver-test-secret';
   delete process.env.DATABASE_URL;
+  process.env.HOMESERVER_TEST_MODE = 'true';
   process.env.NODE_ENV = 'test';
   process.env.PORT = '3999';
+  process.env.REFRESH_TOKEN_TTL_SECONDS = `${60 * 60 * 24 * 30}`;
   process.env.STORAGE_ROOT = storageRoot;
 
-  const app = buildApp();
+  const app = buildApp({
+    config: createInMemoryTestServerConfig({
+      port: 3999,
+      storageRoot,
+    }),
+  });
   await app.ready();
 
   return {
@@ -53,6 +74,49 @@ export async function createTestAppContext(): Promise<TestAppContext> {
       restoreEnv(previousEnv);
     },
   };
+}
+
+export async function createPrismaTestAppContext(): Promise<TestAppContext> {
+  const databaseUrl = getPrismaTestDatabaseUrl();
+
+  assert.notEqual(
+    databaseUrl,
+    null,
+    'HOMESERVER_PRISMA_TEST_DATABASE_URL is required for Prisma integration tests.',
+  );
+
+  const storageRoot = await mkdtemp(
+    path.join(os.tmpdir(), 'homeserver-backend-prisma-'),
+  );
+  const previousEnv = captureEnv();
+
+  process.env.AUTH_TOKEN_SECRET = 'homeserver-test-secret';
+  process.env.DATABASE_URL = databaseUrl;
+  delete process.env.HOMESERVER_TEST_MODE;
+  process.env.NODE_ENV = 'test';
+  process.env.PORT = '3999';
+  process.env.REFRESH_TOKEN_TTL_SECONDS = `${60 * 60 * 24 * 30}`;
+  process.env.STORAGE_ROOT = storageRoot;
+
+  const app = buildApp({
+    config: createDurableTestServerConfig(databaseUrl, storageRoot),
+  });
+  await app.ready();
+  await resetPrismaState(app);
+
+  return {
+    app,
+    cleanup: async () => {
+      await resetPrismaState(app);
+      await app.close();
+      await rm(storageRoot, { force: true, recursive: true });
+      restoreEnv(previousEnv);
+    },
+  };
+}
+
+export function hasPrismaTestDatabaseUrl(): boolean {
+  return getPrismaTestDatabaseUrl() !== null;
 }
 
 export function authorizationHeaders(accessToken: string): Record<string, string> {
@@ -138,19 +202,34 @@ export async function createUserRootFolder(
   return response.json() as FolderResponse;
 }
 
-export async function registerUser(
+export async function seedUserSession(
   app: FastifyInstance,
   userFixture: UserFixture,
-): Promise<RegisteredUser> {
+): Promise<SeededUserSession> {
+  const tokens = await app.authService.provisionUser(
+    userFixture.email,
+    userFixture.password,
+  );
+  return {
+    accessToken: tokens.accessToken,
+    refreshCookie: createRefreshCookieHeader(tokens.refreshToken),
+    userId: tokens.user.id,
+  };
+}
+
+export async function loginUser(
+  app: FastifyInstance,
+  userFixture: UserFixture,
+): Promise<SeededUserSession> {
   const response = await app.inject({
     method: 'POST',
     payload: userFixture,
-    url: '/api/auth/register',
+    url: '/api/auth/login',
   });
 
-  assert.equal(response.statusCode, 201);
+  assert.equal(response.statusCode, 200);
 
-  const body = response.json() as AuthResponse;
+  const body = response.json() as { accessToken: string; user: { id: string } };
   const refreshCookie = getSetCookie(response.headers['set-cookie']);
 
   return {
@@ -190,9 +269,69 @@ function getSetCookie(rawSetCookieHeader: string | string[] | undefined): string
   return rawSetCookieHeader ?? '';
 }
 
-function restoreEnv(
-  previousEnv: Record<string, string | undefined>,
-): void {
+function createRefreshCookieHeader(refreshToken: string): string {
+  return `${REFRESH_COOKIE_NAME}=${encodeURIComponent(refreshToken)}`;
+}
+
+function captureEnv(): PreviousEnv {
+  return {
+    AUTH_TOKEN_SECRET: process.env.AUTH_TOKEN_SECRET,
+    DATABASE_URL: process.env.DATABASE_URL,
+    HOMESERVER_TEST_MODE: process.env.HOMESERVER_TEST_MODE,
+    NODE_ENV: process.env.NODE_ENV,
+    PORT: process.env.PORT,
+    REFRESH_TOKEN_TTL_SECONDS: process.env.REFRESH_TOKEN_TTL_SECONDS,
+    STORAGE_ROOT: process.env.STORAGE_ROOT,
+  };
+}
+
+function createDurableTestServerConfig(
+  databaseUrl: string,
+  storageRoot: string,
+): ServerConfig {
+  return {
+    accessTokenTtlSeconds: 900,
+    authTokenSecret: 'homeserver-test-secret',
+    databaseUrl,
+    host: '127.0.0.1',
+    persistenceMode: 'durable',
+    port: 3999,
+    refreshTokenTtlSeconds: 60 * 60 * 24 * 30,
+    runtimeMode: 'test',
+    storageRoot,
+  };
+}
+
+function getPrismaTestDatabaseUrl(): string | null {
+  const databaseUrl = process.env.HOMESERVER_PRISMA_TEST_DATABASE_URL?.trim();
+
+  if (databaseUrl === undefined || databaseUrl === '') {
+    return null;
+  }
+
+  return databaseUrl;
+}
+
+async function resetPrismaState(app: FastifyInstance): Promise<void> {
+  if (app.prisma === null) {
+    return;
+  }
+
+  await app.prisma.$executeRawUnsafe(`
+    TRUNCATE TABLE
+      "file_derivatives",
+      "media_jobs",
+      "upload_items",
+      "upload_batches",
+      "files",
+      "folders",
+      "sessions",
+      "users"
+    RESTART IDENTITY CASCADE
+  `);
+}
+
+function restoreEnv(previousEnv: PreviousEnv): void {
   for (const [key, value] of Object.entries(previousEnv)) {
     if (value === undefined) {
       delete process.env[key];

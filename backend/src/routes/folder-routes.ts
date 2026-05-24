@@ -5,11 +5,15 @@ import {
   toFolderResponse,
   type FolderEntriesResponse,
   type FolderResponse,
+  toFolderTreeResponse,
+  type FolderTreeResponse,
 } from '../types/api.js';
 import { UnauthorizedError } from '../utils/http-errors.js';
 import {
   folderEntriesResponseSchema,
+  folderParamsSchema,
   folderResponseSchema,
+  folderTreeResponseSchema,
 } from './route-schemas.js';
 
 interface CreateFolderBody {
@@ -31,6 +35,20 @@ interface DeleteFolderQuery {
 }
 
 export async function folderRoutes(app: FastifyInstance): Promise<void> {
+  app.get<{ Reply: FolderTreeResponse }>(
+    '/api/folders/tree',
+    {
+      preHandler: app.authenticate,
+      schema: {
+        response: {
+          200: folderTreeResponseSchema,
+        },
+      },
+    },
+    async (request) =>
+      toFolderTreeResponse(await app.libraryService.listFolders(getUserId(request))),
+  );
+
   app.get<{ Reply: FolderResponse }>(
     '/api/folders/root',
     {
@@ -82,6 +100,7 @@ export async function folderRoutes(app: FastifyInstance): Promise<void> {
     {
       preHandler: app.authenticate,
       schema: {
+        params: folderParamsSchema,
         response: {
           200: folderResponseSchema,
         },
@@ -101,6 +120,7 @@ export async function folderRoutes(app: FastifyInstance): Promise<void> {
     {
       preHandler: app.authenticate,
       schema: {
+        params: folderParamsSchema,
         response: {
           200: folderEntriesResponseSchema,
         },
@@ -129,6 +149,7 @@ export async function folderRoutes(app: FastifyInstance): Promise<void> {
           },
           type: 'object',
         },
+        params: folderParamsSchema,
         response: {
           200: folderResponseSchema,
         },
@@ -150,6 +171,7 @@ export async function folderRoutes(app: FastifyInstance): Promise<void> {
     {
       preHandler: app.authenticate,
       schema: {
+        params: folderParamsSchema,
         querystring: {
           additionalProperties: false,
           properties: {

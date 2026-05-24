@@ -1,4 +1,4 @@
-export type DatabaseMode = 'mariadb' | 'memory';
+export type DatabaseMode = 'postgresql' | 'test-memory';
 
 export type FileStatus = 'ready' | 'uploading';
 export type UploadBatchStatus = 'completed' | 'open' | 'partial';

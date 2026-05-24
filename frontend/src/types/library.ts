@@ -1,5 +1,4 @@
 export type MediaKind = 'image' | 'audio' | 'video' | 'document' | 'archive' | 'other'
-export type FileSource = 'mock' | 'uploaded'
 export type LibraryItemKind = 'file' | 'folder'
 
 export interface FolderRecord {
@@ -23,10 +22,10 @@ export interface FileRecord {
   sizeBytes: number
   mediaKind: MediaKind
   createdAt: string
-  viewerUrl: string | null
-  posterUrl: string | null
+  updatedAt: string
+  contentUrl: string
+  status: string
   description: string
-  source: FileSource
 }
 
 export interface FolderContents {

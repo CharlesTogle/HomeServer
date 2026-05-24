@@ -1,14 +1,16 @@
-import { type FastifyInstance } from 'fastify';
+import { type FastifyPluginAsync } from 'fastify';
+import fp from 'fastify-plugin';
 
 import { AuthService } from '../services/auth-service.js';
 import { LibraryService } from '../services/library-service.js';
 import { PrismaAuthService } from '../services/prisma-auth-service.js';
 import { PrismaLibraryService } from '../services/prisma-library-service.js';
 import { InMemoryHomeServerStore } from '../store/in-memory-store.js';
-import { getServerConfig } from '../utils/env.js';
 
-export async function servicesPlugin(app: FastifyInstance): Promise<void> {
-  const config = getServerConfig();
+const servicesPluginImpl: FastifyPluginAsync = async function servicesPlugin(
+  app,
+): Promise<void> {
+  const config = app.serverConfig;
   const authConfig = {
     accessTokenTtlSeconds: config.accessTokenTtlSeconds,
     authTokenSecret: config.authTokenSecret,
@@ -37,4 +39,9 @@ export async function servicesPlugin(app: FastifyInstance): Promise<void> {
   app.decorate('store', store);
   app.decorate('libraryService', libraryService);
   app.decorate('authService', authService);
-}
+};
+
+export const servicesPlugin = fp(servicesPluginImpl, {
+  dependencies: ['database-plugin', 'storage-plugin'],
+  name: 'services-plugin',
+});

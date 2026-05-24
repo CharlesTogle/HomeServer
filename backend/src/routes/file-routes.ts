@@ -4,7 +4,7 @@ import { type FastifyInstance, type FastifyRequest } from 'fastify';
 
 import { toFileResponse, type FileResponse } from '../types/api.js';
 import { BadRequestError, UnauthorizedError } from '../utils/http-errors.js';
-import { fileResponseSchema } from './route-schemas.js';
+import { fileParamsSchema, fileResponseSchema } from './route-schemas.js';
 
 interface FileParams {
   fileId: string;
@@ -53,6 +53,7 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
     {
       preHandler: app.authenticate,
       schema: {
+        params: fileParamsSchema,
         response: {
           200: fileResponseSchema,
         },
@@ -71,6 +72,9 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
     '/api/files/:fileId/content',
     {
       preHandler: app.authenticate,
+      schema: {
+        params: fileParamsSchema,
+      },
     },
     async (request, reply) => {
       const descriptor = await app.libraryService.getFileReadDescriptor(
@@ -124,6 +128,7 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
           },
           type: 'object',
         },
+        params: fileParamsSchema,
         response: {
           200: fileResponseSchema,
         },
@@ -145,6 +150,7 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
     {
       preHandler: app.authenticate,
       schema: {
+        params: fileParamsSchema,
         response: {
           204: {
             type: 'null',

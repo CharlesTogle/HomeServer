@@ -1,20 +1,19 @@
 import { create } from 'zustand'
-import { ROOT_FOLDER_ID } from '../constants/library.ts'
 
 export type WorkspaceViewMode = 'grid' | 'list'
 
 interface WorkspaceStore {
-  selectedFolderId: string
+  selectedFolderId: string | null
   selectedFileId: string | null
   viewMode: WorkspaceViewMode
-  setSelectedFolderId: (folderId: string) => void
+  setSelectedFolderId: (folderId: string | null) => void
   setSelectedFileId: (fileId: string | null) => void
   setViewMode: (viewMode: WorkspaceViewMode) => void
   reset: () => void
 }
 
 export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
-  selectedFolderId: ROOT_FOLDER_ID,
+  selectedFolderId: null,
   selectedFileId: null,
   viewMode: 'grid',
   setSelectedFolderId: (folderId) => {
@@ -28,7 +27,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   },
   reset: () => {
     set({
-      selectedFolderId: ROOT_FOLDER_ID,
+      selectedFolderId: null,
       selectedFileId: null,
       viewMode: 'grid',
     })

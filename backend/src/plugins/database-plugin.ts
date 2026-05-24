@@ -1,32 +1,41 @@
-import { type FastifyInstance } from 'fastify';
-import { PrismaMariaDb } from '@prisma/adapter-mariadb';
+import { type FastifyPluginAsync } from 'fastify';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
+import fp from 'fastify-plugin';
 
-import { getServerConfig } from '../utils/env.js';
+const databasePluginImpl: FastifyPluginAsync = async function databasePlugin(
+  app,
+): Promise<void> {
+  const config = app.serverConfig;
 
-export async function databasePlugin(app: FastifyInstance): Promise<void> {
-  const config = getServerConfig();
-
-  if (config.databaseUrl === undefined) {
+  if (config.persistenceMode === 'test-memory') {
     app.decorate('database', {
-      mode: 'memory',
+      mode: 'test-memory',
     });
     app.decorate('prisma', null);
 
     return;
   }
 
-  const adapter = new PrismaMariaDb(config.databaseUrl);
+  if (config.databaseUrl === undefined) {
+    throw new Error('DATABASE_URL is required for durable PostgreSQL mode.');
+  }
+
+  const adapter = new PrismaPg(config.databaseUrl);
   const prisma = new PrismaClient({ adapter });
 
   await prisma.$connect();
 
   app.decorate('database', {
-    mode: 'mariadb',
+    mode: 'postgresql',
   });
   app.decorate('prisma', prisma);
 
   app.addHook('onClose', async () => {
     await prisma.$disconnect();
   });
-}
+};
+
+export const databasePlugin = fp(databasePluginImpl, {
+  name: 'database-plugin',
+});

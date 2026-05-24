@@ -27,44 +27,6 @@ interface SessionResponse {
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: AuthBody; Reply: AuthResponse }>(
-    '/api/auth/register',
-    {
-      schema: {
-        body: {
-          additionalProperties: false,
-          properties: {
-            email: { format: 'email', type: 'string' },
-            password: { minLength: 8, type: 'string' },
-          },
-          required: ['email', 'password'],
-          type: 'object',
-        },
-        response: {
-          201: authResponseSchema,
-        },
-      },
-    },
-    async (request, reply) => {
-      const result = await app.authService.register(
-        request.body.email,
-        request.body.password,
-      );
-
-      reply.header(
-        'set-cookie',
-        serializeRefreshCookie(
-          result.refreshToken,
-          getRefreshTokenMaxAgeSeconds(),
-          isProductionSecureCookie(),
-        ),
-      );
-      reply.code(201);
-
-      return toAuthResponse(result.accessToken, result.user);
-    },
-  );
-
-  app.post<{ Body: AuthBody; Reply: AuthResponse }>(
     '/api/auth/login',
     {
       schema: {

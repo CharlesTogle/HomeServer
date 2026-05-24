@@ -1,14 +1,22 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import fp from 'fastify-plugin';
 import { MulterError } from 'multer';
 
 import { registerPlugins } from './plugins/index.js';
 import { registerRoutes } from './routes/index.js';
+import type { ServerConfig } from './utils/env.js';
 import { getLoggerOptions } from './utils/logger.js';
 
-export function buildApp(): FastifyInstance {
+export interface BuildAppOptions {
+  config: ServerConfig;
+}
+
+export function buildApp(options: BuildAppOptions): FastifyInstance {
   const app = Fastify({
     logger: getLoggerOptions(),
   });
+
+  app.decorate('serverConfig', options.config);
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof MulterError) {
@@ -47,10 +55,16 @@ export function buildApp(): FastifyInstance {
     void reply.status(404).send({ message: 'Route not found' });
   });
 
-  app.register(async function homeServer(appInstance): Promise<void> {
-    await registerPlugins(appInstance);
-    await registerRoutes(appInstance);
-  });
+  app.register(homeServerPlugin);
 
   return app;
 }
+
+const homeServerPlugin = fp(async function homeServer(
+  appInstance: FastifyInstance,
+): Promise<void> {
+  await registerPlugins(appInstance);
+  await registerRoutes(appInstance);
+}, {
+  name: 'home-server',
+});

@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
-import type { PrismaClient, Session, User } from '@prisma/client';
+import type { Prisma, PrismaClient, Session, User } from '@prisma/client';
 
 import type {
   AuthServiceConfig,
   AuthServiceContract,
   AuthTokens,
-  LibraryServiceContract,
 } from './contracts.js';
+import { PrismaLibraryService } from './prisma-library-service.js';
 import { toSessionRecord, toUserRecord } from './prisma-mappers.js';
 import type { AuthenticatedSession, SessionRecord, UserRecord } from '../types/domain.js';
 import {
@@ -20,14 +20,16 @@ import {
 } from '../utils/auth-crypto.js';
 import { ConflictError, UnauthorizedError } from '../utils/http-errors.js';
 
+type PrismaDatabaseClient = PrismaClient | Prisma.TransactionClient;
+
 export class PrismaAuthService implements AuthServiceContract {
   private readonly config: AuthServiceConfig;
-  private readonly libraryService: LibraryServiceContract;
+  private readonly libraryService: PrismaLibraryService;
   private readonly prisma: PrismaClient;
 
   public constructor(
     prisma: PrismaClient,
-    libraryService: LibraryServiceContract,
+    libraryService: PrismaLibraryService,
     config: AuthServiceConfig,
   ) {
     this.prisma = prisma;
@@ -138,22 +140,38 @@ export class PrismaAuthService implements AuthServiceContract {
     );
   }
 
-  public async register(email: string, password: string): Promise<AuthTokens> {
+  public async provisionUser(email: string, password: string): Promise<AuthTokens> {
     const normalizedEmail = email.trim().toLowerCase();
     const passwordHash = await hashPassword(password);
+    let createdRootStorageRelPath: string | null = null;
 
     try {
-      const user = await this.prisma.user.create({
-        data: {
-          email: normalizedEmail,
-          passwordHash,
-        },
+      const tokens = await this.prisma.$transaction(async (tx) => {
+        const now = new Date();
+        const user = await tx.user.create({
+          data: {
+            createdAt: now,
+            email: normalizedEmail,
+            passwordHash,
+            updatedAt: now,
+          },
+        });
+        createdRootStorageRelPath =
+          await this.libraryService.createUserRootFolderInTransaction(
+            tx,
+            user.id,
+            now,
+          );
+
+        return this.issueTokensForUser(toUserRecord(user), undefined, tx);
       });
 
-      await this.libraryService.ensureUserRootFolder(user.id);
-
-      return this.issueTokensForUser(toUserRecord(user));
+      return tokens;
     } catch (error) {
+      await this.libraryService.cleanupDirectoryAfterFailedFolderWrite(
+        createdRootStorageRelPath,
+      );
+
       if (
         typeof error === 'object' &&
         error !== null &&
@@ -211,6 +229,7 @@ export class PrismaAuthService implements AuthServiceContract {
   private async issueTokensForUser(
     user: UserRecord,
     existingSession?: SessionRecord,
+    client: PrismaDatabaseClient = this.prisma,
   ): Promise<AuthTokens> {
     const session = existingSession ?? this.issueSessionRecord(user.id);
     const refreshToken = issueRefreshToken();
@@ -223,7 +242,7 @@ export class PrismaAuthService implements AuthServiceContract {
     let persistedSession: Session | null = null;
 
     if (existingSession === undefined) {
-      persistedSession = await this.prisma.session.create({
+      persistedSession = await client.session.create({
         data: {
           createdAt: session.createdAt,
           expiresAt,
@@ -235,7 +254,7 @@ export class PrismaAuthService implements AuthServiceContract {
         },
       });
     } else {
-      persistedSession = await this.prisma.session.update({
+      persistedSession = await client.session.update({
         data: {
           expiresAt,
           refreshTokenHash,

@@ -149,7 +149,7 @@ export class AuthService implements AuthServiceContract {
     return this.issueTokensForUser(user, session);
   }
 
-  public async register(email: string, password: string): Promise<AuthTokens> {
+  public async provisionUser(email: string, password: string): Promise<AuthTokens> {
     const normalizedEmail = email.trim().toLowerCase();
 
     if (this.store.userIdByEmail.has(normalizedEmail)) {

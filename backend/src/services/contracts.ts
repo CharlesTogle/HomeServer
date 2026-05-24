@@ -58,6 +58,11 @@ export interface FolderEntries {
   folders: FolderRecord[];
 }
 
+export interface FolderTreeFolder {
+  folder: FolderRecord;
+  itemCount: number;
+}
+
 export interface UploadBatchSnapshot {
   batch: UploadBatchRecord;
   items: UploadItemRecord[];
@@ -71,8 +76,8 @@ export interface AuthServiceContract {
     refreshToken: string | undefined,
     accessToken: string | undefined,
   ): Promise<void>;
+  provisionUser(email: string, password: string): Promise<AuthTokens>;
   refresh(refreshToken: string): Promise<AuthTokens>;
-  register(email: string, password: string): Promise<AuthTokens>;
 }
 
 export interface LibraryServiceContract {
@@ -101,6 +106,7 @@ export interface LibraryServiceContract {
   getFilesInFolder(userId: string, folderId: string): Promise<FileRecord[]>;
   getFolder(userId: string, folderId: string): Promise<FolderRecord>;
   getFolderEntries(userId: string, folderId: string): Promise<FolderEntries>;
+  listFolders(userId: string): Promise<FolderTreeFolder[]>;
   getRootFolder(userId: string): Promise<FolderRecord>;
   getUploadBatch(
     userId: string,
