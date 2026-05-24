@@ -1,10 +1,12 @@
 import 'dotenv/config';
 
-import { defineConfig, env } from 'prisma/config';
+import { defineConfig } from 'prisma/config';
 
 export default defineConfig({
   datasource: {
-    url: env('DATABASE_URL'),
+    url:
+      process.env.DATABASE_URL ??
+      'mysql://root:password@127.0.0.1:3306/homeserver',
   },
   migrations: {
     path: 'prisma/migrations',
